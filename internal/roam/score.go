@@ -4,8 +4,8 @@ import (
 	"math"
 	"slices"
 
-	"github.com/jwil007/roamctl/internal/config"
-	"github.com/jwil007/roamctl/internal/wpac"
+	"github.com/jwil007/roamjev/internal/config"
+	"github.com/jwil007/roamjev/internal/wpac"
 )
 
 func scoreAll(aps []wpac.RichBSS, cfg *config.Config) []scoredBSS {

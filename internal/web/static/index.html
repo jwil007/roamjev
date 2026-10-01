@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>roamjev</title>
+<link rel="stylesheet" href="uPlot.min.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="logo">roam<b>jev</b></span>
+    <span id="mode" class="badge">…</span>
+    <span id="busy" class="busy"></span>
+  </div>
+  <div class="conn" id="conn"></div>
+  <div class="jevstats" id="jevstats"></div>
+</header>
+
+<main>
+  <section class="tiles" id="tiles"></section>
+
+  <section class="panel charts">
+    <div class="panel-head">
+      <h2>Timeline</h2>
+      <div class="legend-inline">
+        <span class="mk scan"></span>scan
+        <span class="mk roam-ok"></span>roam
+        <span class="mk roam-fail"></span>failed roam
+        <span class="mk ext"></span>external
+      </div>
+      <div class="seg" id="range">
+        <button data-r="120">2m</button>
+        <button data-r="300" class="on">5m</button>
+        <button data-r="900">15m</button>
+        <button data-r="3600">1h</button>
+        <button data-r="0">all</button>
+      </div>
+    </div>
+    <p class="hint">Hover to line up all charts; click a moment to inspect the Jev decision made then.</p>
+    <div class="chart-label">Link quality to gateway <span>MOS (left) · probe loss % (right)</span></div>
+    <div id="c-q" class="chart"></div>
+    <div class="chart-label">Signal and rate <span>RSSI dBm (left) · MCS tx / rx (right)</span></div>
+    <div id="c-s" class="chart"></div>
+    <div class="chart-label">Latency and jitter <span>ms to gateway · TCP retransmit % (host-wide)</span></div>
+    <div id="c-l" class="chart"></div>
+    <div class="chart-label">What Jev is thinking <span>action probabilities (stacked) · diagnostic yes-probabilities (lines)</span></div>
+    <div id="c-m" class="chart"></div>
+  </section>
+
+  <div class="grid2">
+    <section class="panel" id="inspector">
+      <div class="panel-head">
+        <h2>Decision <span id="insp-id"></span></h2>
+        <label class="follow"><input type="checkbox" id="follow" checked> follow latest</label>
+      </div>
+      <div id="insp-body" class="insp-body"><p class="muted">Waiting for the first decision…</p></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Candidates <span class="muted small">as Jev saw them in this decision</span></h2></div>
+      <div class="table-wrap"><table id="cands"></table></div>
+    </section>
+  </div>
+
+  <div class="grid2">
+    <section class="panel">
+      <div class="panel-head"><h2>Scorecard</h2></div>
+      <div id="score" class="score"></div>
+    </section>
+    <section class="panel">
+      <div class="panel-head"><h2>Roam outcomes <span class="muted small">MOS 15 s before vs 3–18 s after</span></h2></div>
+      <div class="table-wrap"><table id="outcomes"></table></div>
+    </section>
+  </div>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>Decision log</h2>
+      <div class="seg" id="logfilter">
+        <button data-f="all" class="on">all</button>
+        <button data-f="act">actions</button>
+        <button data-f="blocked">blocked</button>
+        <button data-f="err">errors</button>
+        <button data-f="notes">events</button>
+      </div>
+    </div>
+    <div class="table-wrap log"><table id="log"></table></div>
+  </section>
+
+  <footer id="foot" class="muted small"></footer>
+</main>
+<script src="uPlot.iife.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

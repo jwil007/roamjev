@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jwil007/roamctl/internal/netlink"
-	"github.com/jwil007/roamctl/internal/wpac"
+	"github.com/jwil007/roamjev/internal/netlink"
+	"github.com/jwil007/roamjev/internal/wpac"
 )
 
 func pollSignal(

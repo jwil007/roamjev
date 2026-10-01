@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jwil007/roamctl/internal/wpac"
+	"github.com/jwil007/roamjev/internal/wpac"
 )
 
 func (rc *roamContext) runScanConcurrent(

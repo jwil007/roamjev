@@ -8,7 +8,7 @@ import (
 
 	"charm.land/bubbles/v2/table"
 	"charm.land/lipgloss/v2"
-	"github.com/jwil007/roamctl/internal/ipc"
+	"github.com/jwil007/roamjev/internal/ipc"
 )
 
 func (m model) viewDashboard() string {

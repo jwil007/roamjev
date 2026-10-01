@@ -9,7 +9,7 @@ import (
 
 	"charm.land/bubbles/v2/table"
 	tea "charm.land/bubbletea/v2"
-	"github.com/jwil007/roamctl/internal/ipc"
+	"github.com/jwil007/roamjev/internal/ipc"
 )
 
 func Tui(iface *string) error {

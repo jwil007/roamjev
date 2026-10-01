@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/table"
-	"github.com/jwil007/roamctl/internal/ipc"
+	"github.com/jwil007/roamjev/internal/ipc"
 )
 
 type client struct {

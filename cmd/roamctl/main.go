@@ -14,10 +14,10 @@ import (
 	"syscall"
 
 	charmlog "charm.land/log/v2"
-	"github.com/jwil007/roamctl/internal/config"
-	"github.com/jwil007/roamctl/internal/ipc"
-	"github.com/jwil007/roamctl/internal/roam"
-	"github.com/jwil007/roamctl/internal/wpac"
+	"github.com/jwil007/roamjev/internal/config"
+	"github.com/jwil007/roamjev/internal/ipc"
+	"github.com/jwil007/roamjev/internal/roam"
+	"github.com/jwil007/roamjev/internal/wpac"
 )
 
 var version = "dev"

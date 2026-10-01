@@ -8,10 +8,10 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
-	"github.com/jwil007/roamctl/internal/config"
-	"github.com/jwil007/roamctl/internal/ipc"
-	"github.com/jwil007/roamctl/internal/netlink"
-	"github.com/jwil007/roamctl/internal/wpac"
+	"github.com/jwil007/roamjev/internal/config"
+	"github.com/jwil007/roamjev/internal/ipc"
+	"github.com/jwil007/roamjev/internal/netlink"
+	"github.com/jwil007/roamjev/internal/wpac"
 )
 
 type roamContext struct {
