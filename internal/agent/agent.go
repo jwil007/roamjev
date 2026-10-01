@@ -61,6 +61,10 @@ type Agent struct {
 	scan       []BSS
 	scanAt     time.Time
 	scanKind   string
+	// scanRSSI is the current AP's RSSI when the last scan ran, so the state
+	// can say how much the client's situation changed since.
+	scanRSSI  int
+	scanBSSID string
 	lastRoam   time.Time
 	connChange time.Time
 	prevBSSID  string
@@ -302,6 +306,9 @@ func (a *Agent) decide(ctx context.Context, trigger string,
 	res, err := a.jev.Evaluate(cctx, state, qs)
 	cancel()
 	a.setBusy("")
+	if ctx.Err() != nil {
+		return // shutting down; not a Jev failure
+	}
 
 	a.mu.Lock()
 	a.calls++
@@ -433,6 +440,7 @@ func (a *Agent) doScan(ctx context.Context, d Decision, link Link) {
 		res, err = a.radio.ScanResults(ctx, a.ssid)
 		if err == nil {
 			a.scan, a.scanAt, a.scanKind = res, time.Now(), kind
+			a.scanRSSI, a.scanBSSID = link.RSSI, link.BSSID
 			act.Found = len(res)
 			act.Success = true
 		}

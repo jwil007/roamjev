@@ -1,3 +1,4 @@
 bins
 # Added by goreleaser init:
 dist/
+/roamjev

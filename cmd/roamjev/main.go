@@ -54,6 +54,7 @@ func run() error {
 	observe := flag.Bool("observe", false, "ask Jev but never act (wpa_supplicant keeps roaming normally)")
 	allowBTM := flag.Bool("allow-btm", false, "leave 802.11v BTM enabled (lets APs steer the client)")
 	level := flag.String("level", "info", "log level: debug, info")
+	probeTest := flag.Bool("probe-test", false, "run only the ARP gateway probe for 10 s and print results (needs root)")
 	showVersion := flag.Bool("version", false, "print version")
 	flag.Parse()
 	if *showVersion {
@@ -72,6 +73,10 @@ func run() error {
 	ctx, cancel := signal.NotifyContext(context.Background(),
 		os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+
+	if *probeTest {
+		return runProbeTest(ctx, *iface)
+	}
 
 	if *replay != "" {
 		store, err := agent.LoadJournal(*replay)
@@ -223,4 +228,37 @@ func roamctlRunning(iface string) (int, bool) {
 		return 0, false
 	}
 	return pid, syscall.Kill(pid, 0) == nil
+}
+
+// runProbeTest checks the ARP prober in isolation: no Jev calls and no
+// wpa_supplicant changes.
+func runProbeTest(ctx context.Context, iface string) error {
+	ring := linkq.NewRing(time.Minute)
+	p := linkq.NewARPProber(iface, ring)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	errc := make(chan error, 1)
+	go func() { errc <- p.Run(ctx) }()
+	tick := time.NewTicker(2 * time.Second)
+	defer tick.Stop()
+	start := time.Now()
+	for {
+		select {
+		case err := <-errc:
+			if err != nil {
+				return err
+			}
+			w := ring.Between(start, time.Now())
+			ip, mac := p.Gateway()
+			fmt.Printf("\ngateway %s (%s)\nsent %d lost %d (%.1f%%)  latency %.2f ms  jitter %.2f ms  MOS %.2f\n",
+				ip, mac, w.Sent, w.Lost, w.LossPct, w.LatencyMs, w.JitterMs, w.MOS)
+			fmt.Printf("TCP: %d segments sent, %d retransmitted (%.2f%%) host-wide\n",
+				w.TCPOutSegs, w.TCPRetrans, w.TCPRetransPct)
+			return nil
+		case <-tick.C:
+			w := ring.Last(2 * time.Second)
+			fmt.Printf("%4.0fs  sent %2d lost %2d  latency %6.2f ms  jitter %5.2f ms  MOS %.2f\n",
+				time.Since(start).Seconds(), w.Sent, w.Lost, w.LatencyMs, w.JitterMs, w.MOS)
+		}
+	}
 }

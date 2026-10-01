@@ -175,7 +175,7 @@ function baseOpts(height, series, axes, scales) {
     cursor: { sync: { key: "rj" }, drag: { x: false, y: false } },
     scales: Object.assign({ x: { time: true } }, scales),
     series: [{}].concat(series),
-    axes: [axis(css("--muted"))].concat(axes),
+    axes: [axis(css("--muted"), { values: (u, vs) => vs.map((v) => new Date(v * 1000).toLocaleTimeString([], { hour12: false })) })].concat(axes),
     legend: { live: true },
     hooks: { draw: [markersHook], ready: [attachClick] },
   };

@@ -256,6 +256,30 @@ func (a *Agent) buildState(link Link, cands []Candidate, now time.Time) map[stri
 	} else {
 		scan["last_scan"] = fmt.Sprintf("%s scan %s", a.scanKind,
 			ago(now.Sub(a.scanAt)))
+		// Candidate RSSI is a snapshot from scan time. Say plainly how much
+		// the client's own situation has changed since, which tells Jev how
+		// far to trust those snapshots.
+		switch {
+		case a.scanBSSID != link.BSSID:
+			scan["since_scan"] = "the scan was taken before the client " +
+				"moved to its current AP; candidate readings are from " +
+				"before that change"
+		default:
+			d := link.RSSI - a.scanRSSI
+			switch {
+			case d <= -3:
+				scan["since_scan"] = fmt.Sprintf("current AP signal has "+
+					"fallen %d dB since this scan; candidate readings were "+
+					"taken before that change", -d)
+			case d >= 3:
+				scan["since_scan"] = fmt.Sprintf("current AP signal has "+
+					"risen %d dB since this scan; candidate readings were "+
+					"taken before that change", d)
+			default:
+				scan["since_scan"] = "current AP signal is about the same " +
+					"as when this scan was taken"
+			}
+		}
 	}
 
 	roam := map[string]any{}

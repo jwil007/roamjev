@@ -345,5 +345,25 @@ func LoadJournal(path string) (*Store, error) {
 			}
 		}
 	}
+	// Rebuild the header status from the recording.
+	var lat float64
+	var n int
+	for _, d := range s.decisions {
+		if d.Err != "" {
+			s.status.Errors++
+		} else if d.LatencyMs > 0 {
+			lat += d.LatencyMs
+			n++
+		}
+	}
+	if n > 0 {
+		s.status.AvgLatency = lat / float64(n)
+	}
+	if len(s.ticks) > 0 {
+		t := s.ticks[len(s.ticks)-1]
+		s.status.BSSID, s.status.Freq = t.BSSID, t.Freq
+		s.status.Band, s.status.Channel = bandChannel(t.Freq)
+	}
+	s.status.Gateway = "replay"
 	return s, sc.Err()
 }
