@@ -37,6 +37,11 @@ type ap struct {
 type World struct {
 	SSID  string
 	Speed float64 // walking speed, m/s
+	// Scenario is "walk" (hallway of APs) or "boundary" (standing still
+	// midway between two equal APs: the classic ping-pong setup).
+	Scenario string
+	// shadowStep scales the slow shadowing random walk.
+	shadowStep float64
 
 	mu       sync.Mutex
 	aps      []*ap
@@ -55,10 +60,10 @@ type World struct {
 	tcpRetx  uint64
 }
 
-func NewWorld(ring *linkq.Ring, speed float64) *World {
+func NewWorld(ring *linkq.Ring, speed float64, scenario string) (*World, error) {
 	w := &World{SSID: "lab-sim", Speed: speed, ring: ring, dir: 1,
 		cache: map[string]agent.BSS{}, cacheAt: map[string]time.Time{},
-		start: time.Now(), x: 2}
+		start: time.Now(), x: 2, Scenario: scenario, shadowStep: 0.6}
 	add := func(i int, x float64, freq, ch int, band, width, phy string,
 		tx, pl float64) {
 		w.aps = append(w.aps, &ap{
@@ -67,6 +72,21 @@ func NewWorld(ring *linkq.Ring, speed float64) *World {
 			phy: phy, txPower: tx, pl1m: pl, util: 15 + rand.Float64()*20,
 			ft: true,
 		})
+	}
+	if scenario == "boundary" {
+		// Two identical 5 GHz APs 90 m apart; the client stands midway at
+		// about -76 dBm from each: the marginal edge where real ping-pong
+		// happens. Shadowing (~3 dB) keeps swapping which one looks
+		// stronger, and dips on either cost some loss, so roaming always
+		// looks tempting but rarely helps for long.
+		add(1, 0, 5180, 36, "5GHz", "80MHz", "802.11ax", 20, 46.4)
+		add(2, 90, 5745, 149, "5GHz", "80MHz", "802.11ax", 20, 46.4)
+		w.x, w.Speed, w.shadowStep = 45, 0, 2.0
+		w.cur, w.since = w.aps[0], time.Now()
+		return w, nil
+	}
+	if scenario != "walk" && scenario != "" {
+		return nil, fmt.Errorf("unknown sim scenario %q (walk, boundary)", scenario)
 	}
 	// Four dual-band APs along an 80 m hallway, plus a 2.4 GHz-only AP.
 	chans5 := []int{36, 100, 149, 52}
@@ -80,7 +100,7 @@ func NewWorld(ring *linkq.Ring, speed float64) *World {
 	add(9, 39, 2437, 6, "2.4GHz", "20MHz", "802.11n", 17, 40.0)
 	w.cur = w.aps[0]
 	w.since = time.Now()
-	return w
+	return w, nil
 }
 
 func (w *World) rssiOf(a *ap) float64 {
@@ -113,7 +133,7 @@ func (w *World) Run(ctx context.Context) {
 }
 
 func (w *World) advance(now time.Time, dt float64) {
-	if now.After(w.pauseTil) {
+	if w.Speed > 0 && now.After(w.pauseTil) {
 		w.x += w.dir * w.Speed * dt
 		// Turn around at the ends; sometimes stop at a "desk".
 		if w.x > 82 || w.x < -4 {
@@ -124,7 +144,7 @@ func (w *World) advance(now time.Time, dt float64) {
 		}
 	}
 	for i, a := range w.aps {
-		a.shadow += (rand.Float64()-0.5)*0.6 - a.shadow*0.02
+		a.shadow += (rand.Float64()-0.5)*w.shadowStep - a.shadow*0.02
 		// AP 3's radios get congested for a minute out of every three.
 		target := 20.0
 		if i/2 == 2 && int(now.Sub(w.start).Minutes())%3 == 1 {

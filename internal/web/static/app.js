@@ -28,6 +28,7 @@ const NOULS = [
   ["link_degraded", "link degraded?", "--n-deg"],
   ["better_ap_available", "better AP available?", "--n-better"],
   ["scan_data_stale", "scan data stale?", "--n-stale"],
+  ["roam_short_lived", "roam would be short-lived?", "--n-pp"],
 ];
 
 function mosColor(m) {
@@ -56,10 +57,10 @@ async function load() {
     actions: snap.actions || [], outcomes: snap.outcomes || [],
     notes: snap.notes || [], candidates: snap.candidates || [],
   });
-  if (S.info.mode === "replay") { rangeSec = 0; setSeg("range", "0"); }
+  if (S.info.replay) { rangeSec = 0; setSeg("range", "0"); }
   buildCharts();
   dirty.charts = dirty.panels = true;
-  if (S.info.mode !== "replay") stream();
+  if (!S.info.replay) stream();
 }
 
 function stream() {
@@ -83,10 +84,10 @@ function stream() {
 // ---- header & tiles ------------------------------------------------------
 function renderHeader() {
   const i = S.info, s = S.status;
-  const mode = (i.mode || "").split("+")[0];
+  const mode = (i.mode || "").split(/[+-]/)[0];
   const m = $("mode");
-  m.textContent = i.mode || "…";
-  m.className = "badge " + mode;
+  m.textContent = (i.replay ? "replay · " : "") + (i.mode || "…");
+  m.className = "badge " + (i.replay ? "replay" : mode);
   $("busy").textContent = s.busy || "";
   $("conn").innerHTML = [
     ["SSID", s.ssid], ["AP", s.bssid ? `${apId(s.bssid)} · ${s.band} ch ${s.channel}` : (s.wpa_state || "–")],
@@ -246,7 +247,7 @@ function buildCharts() {
 let mindRaw = [[], [], [], []];
 
 function xRange() {
-  const now = S.info.mode === "replay" && S.ticks.length ? ts(S.ticks[S.ticks.length - 1].t) : Date.now() / 1000;
+  const now = S.info.replay && S.ticks.length ? ts(S.ticks[S.ticks.length - 1].t) : Date.now() / 1000;
   const first = S.ticks.length ? ts(S.ticks[0].t) : now - 60;
   if (!rangeSec) return [first, now];
   return [now - rangeSec, now];
@@ -324,6 +325,7 @@ function renderInspector() {
       ${changed ? `· executed <span class="pill ${esc(d.executed)}">${esc(d.executed)}</span>` : ""}
     </div>
     ${d.blocked ? `<div class="blocked">Rail: ${esc(d.blocked)}</div>` : ""}
+    ${d.state?.roaming?.pattern ? `<div class="pp">⇄ Pattern stated to Jev: ${esc(d.state.roaming.pattern)}</div>` : ""}
     <div><div class="sub">Action</div>${bars(A.action?.probabilities, ACTIONS, (k) => css(ACTION_COLOR[k]), d.chosen)}</div>
     <div><div class="sub">Target AP <span class="muted small" style="text-transform:none">(confidence ${f2(A.target?.confidence)})</span></div>
       ${bars(Object.fromEntries(tOrder.map((k) => [tgtNames[k] || k, tProbs[k]])), tOrder.map((k) => tgtNames[k] || k), () => css("--roam"), tgtNames[A.target?.choice] || A.target?.choice)}</div>
@@ -356,7 +358,7 @@ function renderCandidates() {
   const rows = [];
   rows.push(`<tr class="current"><td class="mono">${esc(cur.id)} <span class="muted">(current)</span></td><td>${esc(cur.band || "")} ${cur.channel ?? ""}</td><td>${esc(cur.width || "")}</td>
     <td class="num">${sig.rssi_dbm ?? "–"}</td><td class="num">–</td><td class="num">${cur.channel_utilization_pct ?? "–"}</td><td class="num">–</td><td class="num">–</td>
-    <td class="hist">${esc([sig.trend_10s, st.connection?.link_quality_last_10s?.rating].filter(Boolean).join(" · "))}</td><td></td></tr>`);
+    <td class="hist">${esc([sig.trend_10s, st.connection?.link_quality_last_10s?.rating, cur.history].filter(Boolean).join(" · "))}</td><td></td></tr>`);
   for (const c of st.candidate_aps || []) {
     const p = probs[c.id] ?? 0;
     const pick = d.answers?.target?.choice === c.id;
@@ -394,11 +396,40 @@ function renderScore() {
   const ext = S.notes.filter((n) => n.kind === "external").length;
   const errs = S.decisions.filter((d) => d.err).length;
   const toks = S.decisions.filter((d) => d.tokens).map((d) => d.tokens);
+  // Connection changes from the BSSID timeline (covers external roams too).
+  const changes = [];
+  let prevB = null, joinedAt = null, stayR = [];
+  const stays = [];
+  const med = (xs) => xs.slice().sort((a, b) => a - b)[Math.floor(xs.length / 2)];
+  const fallOf = (r) => { if (r.length < 2) return 0; const k = Math.min(3, Math.floor(r.length / 2)); return med(r.slice(0, k)) - med(r.slice(-k)); };
+  for (const t of S.ticks) {
+    if (!t.connected || !t.bssid) continue;
+    if (prevB && t.bssid !== prevB) {
+      changes.push({ t: ts(t.t), from: prevB, to: t.bssid, fall: fallOf(stayR) });
+      stayR = [];
+      if (joinedAt != null) stays.push(ts(t.t) - joinedAt);
+      joinedAt = ts(t.t);
+    } else if (!prevB) joinedAt = null; // first AP: stay start unknown
+    prevB = t.bssid;
+    stayR.push(t.rssi);
+  }
+  // A quick return only counts as ping-pong if the AP being left hadn't
+  // faded (< 6 dB); otherwise the client was probably moving.
+  let pingPongs = 0, justified = 0;
+  for (let i = 1; i < changes.length; i++) {
+    const a = changes[i - 1], b = changes[i];
+    if (b.to === a.from && b.from === a.to && b.t - a.t <= 60) {
+      if (b.fall >= 6) justified++; else pingPongs++;
+    }
+  }
+  const avgStay = stays.length ? stays.reduce((x, y) => x + y, 0) / stays.length : null;
   const cards = [
     ["Average MOS", f2(avgMos), `${pct(good)} of time ≥ 4.03 (good)`],
     ["Disconnected", pct(disc), `${ext} external roam(s)`],
     ["Roams", `${ok.length} / ${roams.length}`, `${roams.length - ok.length} failed · median ${median(ok.map((a) => a.duration_ms))?.toFixed(0) ?? "–"} ms`],
     ["Roam outcomes", `${verdicts.better}↑ ${verdicts["no change"]}· ${verdicts.worse}↓`, `avg ΔMOS ${avgDelta == null ? "–" : (avgDelta > 0 ? "+" : "") + avgDelta.toFixed(2)}`],
+    ["Ping-pong", String(pingPongs), `quick returns with < 6 dB fade · ${justified} justified (AP faded first) · ${changes.length} AP changes`],
+    ["Average stay", avgStay == null ? "–" : (avgStay < 90 ? Math.round(avgStay) + " s" : (avgStay / 60).toFixed(1) + " min"), `${runSec ? (changes.length / (runSec / 60)).toFixed(2) : "–"} roams/min`],
     ["Scans", `${scansT.length} tgt · ${scansF.length} full`, `${scanSec.toFixed(1)} s scanning (${runSec ? (100 * scanSec / runSec).toFixed(1) : "–"}% of run)`],
     ["Jev calls", String(S.decisions.length), `${errs} error(s) · ${blocked} blocked by rails`],
     ["Jev latency", lats.length ? Math.round(median(lats)) + " ms" : "–", `p95 ${lats.length ? Math.round(p95(lats)) + " ms" : "–"}`],
@@ -486,6 +517,6 @@ setInterval(() => {
   }
 }, 500);
 // Live mode: keep the x axis sliding even between ticks.
-setInterval(() => { if (S.info.mode !== "replay") dirty.charts = true; }, 1000);
+setInterval(() => { if (!S.info.replay) dirty.charts = true; }, 1000);
 
 load().then(renderHeader);

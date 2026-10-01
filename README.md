@@ -58,6 +58,29 @@ Jev is stateless, so the state carries memory: the last few events, and per-AP
 history such as "last roam here 3 min ago: MOS 2.4 -> 4.4 (better)" or failed
 attempts. Jev can see the consequences of its own earlier choices.
 
+### Roam history and ping-pong
+
+Jev is stateless and, per TypeSafe, doesn't count list items reliably, so
+code counts and states the facts instead of handing over a raw roam log:
+
+- per AP (candidates and the current AP): roams to it in the last 10 min,
+  how long ago the client left it, average stay per visit;
+- overall: roams in the last 10 min, and — when the latest changes alternate
+  between the same two APs — a plain statement such as *"the client has
+  switched back and forth between ap_a and ap_b 3 times in the last 2.1 min;
+  average stay 24s"*.
+
+None of this blocks anything (no hysteresis rail); it's information. Jev is
+also asked a diagnostic noul, *"If the client roamed now, would that roam
+likely be short-lived or reversed soon?"*, shown in the UI.
+
+The scorecard counts **ping-pongs** (returning to the previous AP within
+60 s, from the BSSID timeline, so external roams count too), average stay,
+and roams per minute. To test it, `-sim-scenario boundary` parks the client
+midway between two identical APs at about −76 dBm, where shadowing keeps
+swapping which one looks stronger. `-hide-history` removes the history
+facts so the two can be compared.
+
 ### Rails (the only places code overrides Jev)
 
 | Rail | Default | Flag |
@@ -115,6 +138,16 @@ sudo ./roamjev -iface wlp1s0
 
 # Review a past run (no radio, no API calls).
 ./roamjev -replay /var/lib/roamjev/<run>.jsonl
+
+# Scorecards for one or more runs, side by side.
+./roamjev -summary run1.jsonl run2.jsonl
+
+# Ping-pong A/B in the simulator.
+./roamjev -sim -sim-scenario boundary
+./roamjev -sim -sim-scenario boundary -hide-history -listen 127.0.0.1:8078
+
+# Check the gateway ARP probe alone (no Jev, no wpa_supplicant changes).
+sudo ./roamjev -iface wlp1s0 -probe-test
 ```
 
 API key lookup order: `$TYPESAFE_API_KEY`, `-key FILE`, `/etc/roamjev/api_key`,

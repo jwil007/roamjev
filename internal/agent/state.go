@@ -115,6 +115,19 @@ func (a *Agent) memoryLine(bssid string, now time.Time) string {
 	return strings.Join(parts, "; ")
 }
 
+func (a *Agent) historyLine(bssid string, now time.Time, current bool) string {
+	parts := []string{}
+	if !a.cfg.HideHistory {
+		if h := a.historyOf(bssid, now).words(now, current); h != "" {
+			parts = append(parts, h)
+		}
+	}
+	if m := a.memoryLine(bssid, now); m != "" {
+		parts = append(parts, m)
+	}
+	return strings.Join(parts, "; ")
+}
+
 func (a *Agent) buildCandidates(link Link, now time.Time) []Candidate {
 	var out []Candidate
 	scanAge := now.Sub(a.scanAt)
@@ -126,7 +139,7 @@ func (a *Agent) buildCandidates(link Link, now time.Time) []Candidate {
 			UtilPct: b.UtilPct, Stations: b.Stations,
 			EstMbps:  b.EstThroughputKbps / 1000,
 			SeenAgoS: int((scanAge + b.Age).Seconds()),
-			History:  a.memoryLine(b.BSSID, now),
+			History:  a.historyLine(b.BSSID, now, b.BSSID == link.BSSID),
 			Current:  b.BSSID == link.BSSID,
 		}
 		out = append(out, c)
@@ -191,6 +204,11 @@ func (a *Agent) buildState(link Link, cands []Candidate, now time.Time) map[stri
 
 	cur := map[string]any{"bssid": link.BSSID, "id": apID(link.BSSID),
 		"freq_mhz": link.Freq, "width": link.Width}
+	if !a.cfg.HideHistory {
+		if h := a.historyOf(link.BSSID, now).words(now, true); h != "" {
+			cur["history"] = h
+		}
+	}
 	for _, c := range cands {
 		if c.Current {
 			cur["band"] = c.Band
@@ -288,6 +306,12 @@ func (a *Agent) buildState(link Link, cands []Candidate, now time.Time) map[stri
 	} else {
 		roam["last_roam"] = ago(now.Sub(a.lastRoam))
 	}
+	if !a.cfg.HideHistory {
+		roam["roams_last_10_min"] = a.roamsWithin(now, historyWindow)
+		if p := a.pingPong(now); p != "" {
+			roam["pattern"] = p
+		}
+	}
 
 	return map[string]any{
 		"goal": "Keep the best real-time link quality for this Wi-Fi " +
@@ -358,6 +382,9 @@ func questions(cands []Candidate) map[string]jev.Question {
 		"better_ap_available": jev.Noul(
 			"Is there a candidate AP that would clearly give better " +
 				"link quality than the current AP?"),
+		"roam_short_lived": jev.Noul(
+			"If the client roamed now, would that roam likely be " +
+				"short-lived or reversed soon?"),
 		"scan_data_stale": jev.Noul(
 			"Is the scan data too old or incomplete to make a good " +
 				"roaming decision?"),

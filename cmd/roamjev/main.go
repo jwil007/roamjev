@@ -41,6 +41,8 @@ func run() error {
 	iface := flag.String("iface", "wlan0", "Wi-Fi interface")
 	simMode := flag.Bool("sim", false, "simulate a hallway of APs instead of using the radio")
 	simSpeed := flag.Float64("sim-speed", 1.2, "simulated walking speed, m/s")
+	simScenario := flag.String("sim-scenario", "walk", "walk (hallway of APs) or boundary (standing between two equal APs)")
+	hideHistory := flag.Bool("hide-history", false, "experiment control: omit roam-count, dwell and ping-pong facts from Jev's state")
 	replay := flag.String("replay", "", "serve the dashboard for a recorded journal (no radio, no Jev)")
 	listen := flag.String("listen", "127.0.0.1:8077", "dashboard address")
 	keyPath := flag.String("key", "", "API key file (default: $TYPESAFE_API_KEY, /etc/roamjev/api_key, ~/.config/roamctl-jev/api_key)")
@@ -54,6 +56,7 @@ func run() error {
 	observe := flag.Bool("observe", false, "ask Jev but never act (wpa_supplicant keeps roaming normally)")
 	allowBTM := flag.Bool("allow-btm", false, "leave 802.11v BTM enabled (lets APs steer the client)")
 	level := flag.String("level", "info", "log level: debug, info")
+	summary := flag.Bool("summary", false, "print a scorecard for each journal given as an argument, then exit")
 	probeTest := flag.Bool("probe-test", false, "run only the ARP gateway probe for 10 s and print results (needs root)")
 	showVersion := flag.Bool("version", false, "print version")
 	flag.Parse()
@@ -73,6 +76,18 @@ func run() error {
 	ctx, cancel := signal.NotifyContext(context.Background(),
 		os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+
+	if *summary {
+		for _, f := range flag.Args() {
+			st, err := agent.LoadJournal(f)
+			if err != nil {
+				return fmt.Errorf("%s: %w", f, err)
+			}
+			agent.Summarize(st).Print(os.Stdout, filepath.Base(f))
+			fmt.Println()
+		}
+		return nil
+	}
 
 	if *probeTest {
 		return runProbeTest(ctx, *iface)
@@ -104,14 +119,18 @@ func run() error {
 	cfg.BudgetUSD = *budget
 	cfg.MaxCandidates = *maxCands
 	cfg.Observe = *observe
+	cfg.HideHistory = *hideHistory
 
 	mode := "live"
 	if *simMode {
-		mode = "sim"
+		mode = "sim-" + *simScenario
 		*iface = "sim0"
 	}
 	if *observe {
 		mode += "+observe"
+	}
+	if *hideHistory {
+		mode += "+nohistory"
 	}
 	journal, err := journalPath(*journalDir, mode, *iface)
 	if err != nil {
@@ -127,7 +146,10 @@ func run() error {
 	var radio agent.Radio
 	var gateway func() string
 	if *simMode {
-		w := sim.NewWorld(ring, *simSpeed)
+		w, err := sim.NewWorld(ring, *simSpeed, *simScenario)
+		if err != nil {
+			return err
+		}
 		go w.Run(ctx)
 		radio = w
 		gateway = func() string { return fmt.Sprintf("simulated (client at x=%.0f m)", w.Position()) }

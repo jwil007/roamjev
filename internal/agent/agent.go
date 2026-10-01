@@ -33,6 +33,9 @@ type Config struct {
 	BudgetUSD float64
 	// Observe asks Jev but never acts on the answer.
 	Observe bool
+	// HideHistory leaves out the roam-count / dwell / ping-pong facts, as
+	// the control arm of an A/B comparison.
+	HideHistory bool
 }
 
 func DefaultConfig() Config {
@@ -68,6 +71,7 @@ type Agent struct {
 	lastRoam   time.Time
 	connChange time.Time
 	prevBSSID  string
+	visits     []visit
 	mem        map[string]*bssMemory
 	recent     []string
 	decisionID int
@@ -283,7 +287,9 @@ func (a *Agent) decide(ctx context.Context, trigger string,
 		}
 		a.prevBSSID = link.BSSID
 		a.selfRoam = false
+		a.recordJoin(link.BSSID, a.connChange)
 	}
+	a.observeRSSI(link.BSSID, link.RSSI)
 
 	a.mu.Lock()
 	paused := a.paused
@@ -490,6 +496,7 @@ func (a *Agent) doRoam(ctx context.Context, d Decision, link Link) {
 	}
 	a.connChange = done
 	a.prevBSSID = d.Target
+	a.recordJoin(d.Target, done)
 	a.selfRoam = false
 	a.addRecent("roamed %s -> %s in %d ms", apID(link.BSSID),
 		apID(d.Target), r.Duration.Milliseconds())

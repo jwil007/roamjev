@@ -100,6 +100,7 @@ type Info struct {
 	BudgetUSD float64   `json:"budget_usd"`
 	Journal   string    `json:"journal"`
 	Version   string    `json:"version"`
+	Replay    bool      `json:"replay,omitempty"`
 }
 
 // Status is the live summary shown in the UI header.
@@ -308,7 +309,7 @@ func LoadJournal(path string) (*Store, error) {
 		case "info":
 			var v Info
 			if json.Unmarshal(raw.Data, &v) == nil {
-				v.Mode = "replay"
+				v.Replay = true
 				s.info = v
 			}
 		case "tick":
