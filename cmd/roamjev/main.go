@@ -95,6 +95,12 @@ func run() error {
 			if pol == "" {
 				pol = "jev"
 			}
+			// Variants of the same policy compare as separate arms.
+			for _, v := range []string{"verify", "nohistory"} {
+				if strings.Contains(info.Mode, "+"+v) {
+					pol += "+" + v
+				}
+			}
 			runs[agent.RunKey{Scenario: scen, Seed: info.SimSeed, Policy: pol}] = agent.Summarize(st)
 		}
 		agent.Compare(os.Stdout, runs)
