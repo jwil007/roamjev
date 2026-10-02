@@ -44,6 +44,25 @@ weights and deltas with a loop where Jev decides:
  └──────────────────────────────────────────────────────────────┘
 ```
 
+### Ground rules: keeping it Jev
+
+This experiment tests a different paradigm, not a better hand-tuned
+algorithm (roamctl already is one). So:
+
+1. **Jev makes every decision.** Code never applies a threshold that
+   triggers or blocks a scan or roam, beyond minimal visible rails (roam
+   and scan gaps, a valid target, an optional pre-roam staleness check
+   that can only re-ask Jev, never decide to stay).
+2. **Improvements go through Jev's channels:** facts and domain knowledge
+   in the briefing, clearer presentation (code does arithmetic and states
+   the result), and question design. Never a hard-coded policy like
+   "roam if the difference exceeds 6 dB".
+3. **Validate cheaply, then confirm.** Presentation changes are first
+   tried on real failure states (send variants of one recorded state and
+   see how Jev's answer moves), then confirmed with a paired simulator
+   batch against the classic arm.
+4. **Log every round** in [docs/iterations.md](docs/iterations.md).
+
 ### Why the state is "described", not just dumped
 
 TypeSafe documents that Jev 1.13 reads instructions literally, is weak at
