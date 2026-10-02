@@ -147,19 +147,48 @@ func (a *Agent) buildCandidates(link Link, now time.Time) []Candidate {
 		out = append(out, c)
 	}
 	slices.SortFunc(out, func(x, y Candidate) int { return y.RSSI - x.RSSI })
-	// Keep the current AP plus the strongest N others.
+	return selectCandidates(out, a.cfg.MaxCandidates)
+}
+
+// selectCandidates keeps the current AP plus up to max others, taking the
+// strongest of each band first. Picking purely by RSSI let 2.4 GHz radios
+// (which read stronger at the same distance) crowd 5 and 6 GHz options out
+// of Jev's view. in must be sorted strongest first.
+func selectCandidates(in []Candidate, max int) []Candidate {
 	var kept []Candidate
-	n := 0
-	for _, c := range out {
+	chosen := map[string]bool{}
+	perBand := map[string]int{}
+	pick := func(c Candidate) {
+		kept = append(kept, c)
+		chosen[c.BSSID] = true
+	}
+	for _, c := range in {
 		if c.Current {
-			kept = append(kept, c)
-			continue
-		}
-		if n < a.cfg.MaxCandidates {
-			kept = append(kept, c)
-			n++
+			pick(c)
 		}
 	}
+	// Up to two per band first, strongest first.
+	n := 0
+	for _, c := range in {
+		if c.Current || n >= max || perBand[c.Band] >= 2 {
+			continue
+		}
+		pick(c)
+		perBand[c.Band]++
+		n++
+	}
+	// Fill the rest by signal.
+	for _, c := range in {
+		if n >= max {
+			break
+		}
+		if c.Current || chosen[c.BSSID] {
+			continue
+		}
+		pick(c)
+		n++
+	}
+	slices.SortFunc(kept, func(x, y Candidate) int { return y.RSSI - x.RSSI })
 	return kept
 }
 
@@ -280,6 +309,9 @@ func (a *Agent) buildState(link Link, cands []Candidate, now time.Time) map[stri
 		if c.UtilPct >= 0 {
 			m["channel_utilization_pct"] = c.UtilPct
 		}
+		if likelySameAP(c.BSSID, link.BSSID) {
+			m["same_ap_as_current"] = "likely: another radio of the AP the client is on"
+		}
 		if c.History != "" {
 			m["history"] = c.History
 		}
@@ -326,6 +358,9 @@ func (a *Agent) buildState(link Link, cands []Candidate, now time.Time) map[stri
 	}
 	if !a.cfg.HideHistory {
 		roam["roams_last_10_min"] = a.roamsWithin(now, historyWindow)
+		if n := a.sameAPSwitches(now); n > 0 {
+			roam["band_switches_within_one_ap_last_10_min"] = n
+		}
 		if p := a.pingPong(now); p != "" {
 			roam["pattern"] = p
 		}

@@ -58,6 +58,13 @@ var briefing = map[string]any{
 			"network needs a full handshake (about 100-250 ms) and an " +
 			"802.1X network a full authentication (often 0.3-1 s, " +
 			"sometimes more).",
+		"An AP usually has several co-located radios (2.4, 5, 6 GHz) " +
+			"that a client sees as separate BSSIDs. Co-located radios fade " +
+			"together, so their relationship stays roughly fixed wherever " +
+			"the client is (5 and 6 GHz typically differ by 1-2 dB). A good " +
+			"client picks the best band when it joins an AP, preferring 6 " +
+			"GHz at comparable signal, and sticks with it; switching between " +
+			"radios of the same AP is churn, not improvement.",
 		"Signal readings from a scan are snapshots; if the client is " +
 			"moving they drift within seconds. Waiting for perfectly fresh " +
 			"readings while moving can mean never acting: a reading a few " +
@@ -211,15 +218,21 @@ func (a *Agent) securityWords(link Link) string {
 
 // scanScopes returns the channel list for each scan action.
 func (a *Agent) scanScopes(link Link, cands []Candidate) (quick, known []int) {
+	// The best candidate on each band first, then the next strongest, so a
+	// quick scan never refreshes only the band that happens to read loudest.
 	seen := map[int]bool{}
-	for _, c := range cands { // cands are strongest first
-		if c.Current || seen[c.Freq] {
-			continue
-		}
-		seen[c.Freq] = true
-		quick = append(quick, c.Freq)
-		if len(quick) == 3 {
-			break
+	bandDone := map[string]bool{}
+	for pass := 0; pass < 2 && len(quick) < 3; pass++ {
+		for _, c := range cands { // strongest first
+			if c.Current || seen[c.Freq] || len(quick) >= 3 {
+				continue
+			}
+			if pass == 0 && bandDone[c.Band] {
+				continue
+			}
+			seen[c.Freq] = true
+			bandDone[c.Band] = true
+			quick = append(quick, c.Freq)
 		}
 	}
 	all := map[int]bool{link.Freq: true}
@@ -420,4 +433,37 @@ func trafficClass(kbps float64) string {
 	default:
 		return "heavy traffic (downloads, uploads)"
 	}
+}
+
+// likelySameAP guesses whether two BSSIDs are radios of one physical AP.
+// Vendors usually derive them from one base MAC, so they share the first
+// four octets and differ by a small amount in the last two. A heuristic:
+// the 802.11 Reduced Neighbor Report's co-located flag is the proper
+// source, and parsing it is a follow-up for live radios.
+func likelySameAP(a, b string) bool {
+	if a == b || len(a) != 17 || len(b) != 17 || a[:11] != b[:11] {
+		return false
+	}
+	var x, y uint64
+	if _, err := fmt.Sscanf(strings.ReplaceAll(a[12:], ":", ""), "%x", &x); err != nil {
+		return false
+	}
+	if _, err := fmt.Sscanf(strings.ReplaceAll(b[12:], ":", ""), "%x", &y); err != nil {
+		return false
+	}
+	d := int64(x) - int64(y)
+	return d > -256 && d < 256
+}
+
+// sameAPSwitches counts recent roams between radios of one physical AP.
+func (a *Agent) sameAPSwitches(now time.Time) int {
+	n := 0
+	for i := 1; i < len(a.visits); i++ {
+		v := a.visits[i]
+		if now.Sub(v.joined) <= historyWindow &&
+			likelySameAP(v.bssid, a.visits[i-1].bssid) {
+			n++
+		}
+	}
+	return n
 }

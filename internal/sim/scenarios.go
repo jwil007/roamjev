@@ -73,7 +73,7 @@ func roamEAP(r *rand.Rand) float64 {
 var dualBand56 = func(ch5, ch6 int) []radioSpec {
 	return []radioSpec{
 		{"5GHz", ch5, "80MHz", "802.11ax", 20},
-		{"6GHz", ch6, "160MHz", "802.11be", 18},
+		{"6GHz", ch6, "160MHz", "802.11be", 19},
 	}
 }
 

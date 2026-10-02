@@ -37,6 +37,7 @@ func noiseFloor(band string) float64 {
 
 type ap struct {
 	idx     int // physical AP index in the scenario
+	shared  *float64 // shadowing shared by all radios of this AP (same path)
 	bssid   string
 	x, y    float64
 	freq    int
@@ -110,18 +111,21 @@ func NewWorld(ring *linkq.Ring, speed float64, scenario string, seed uint64) (*W
 		cache: map[string]agent.BSS{}, cacheAt: map[string]time.Time{},
 		start: time.Now(), cf: map[string]*linkq.Ring{}}
 	for i, s := range sc.aps {
-		for _, r := range s.radios {
+		shared := new(float64)
+		for ri, r := range s.radios {
 			freq := chanFreq(r.band, r.channel)
 			pl := 46.4 // 5 GHz free-space loss at 1 m
 			switch r.band {
 			case "2.4GHz":
 				pl = 40.0
 			case "6GHz":
-				pl = 48.0
+				pl = 47.4 // ~1 dB more free-space loss than 5 GHz
 			}
-			a := &ap{idx: i,
-				bssid: fmt.Sprintf("02:5a:%02x:%02x:%02x:%02x", i+1,
-					len(w.aps), freq%256, r.channel),
+			a := &ap{idx: i, shared: shared,
+				// Radios of one AP share a base MAC and differ in the last
+				// octet, as most vendors allocate them.
+				bssid: fmt.Sprintf("02:5a:00:%02x:%02x:%02x", i+1, 0x10,
+					0x10*ri),
 				x: s.x, y: s.y, freq: freq, channel: r.channel, band: r.band,
 				width: r.width, phy: r.phy, txPower: r.txPower, pl1m: pl,
 				util: s.baseUtil}
@@ -177,7 +181,7 @@ func (w *World) nextActivity(now time.Time) {
 
 func (w *World) rssiOf(a *ap) float64 {
 	d := math.Max(1, math.Hypot(a.x-w.x, a.y-w.y))
-	return a.txPower - (a.pl1m + 10*w.sc.exponent*math.Log10(d)) + a.shadow
+	return a.txPower - (a.pl1m + 10*w.sc.exponent*math.Log10(d)) + *a.shared + a.shadow
 }
 
 // Run advances the world and generates ARP-like probe samples into the ring.
@@ -235,8 +239,13 @@ func (w *World) advance(now time.Time, dt float64) {
 		w.nextActivity(now)
 	}
 	el := now.Sub(w.start)
+	stepped := map[*float64]bool{}
 	for _, a := range w.aps {
-		a.shadow += (w.wr.Float64()-0.5)*sc.shadow - a.shadow*0.02
+		if !stepped[a.shared] {
+			*a.shared += (w.wr.Float64()-0.5)*sc.shadow - *a.shared*0.02
+			stepped[a.shared] = true
+		}
+		a.shadow += (w.wr.Float64()-0.5)*0.3 - a.shadow*0.05
 		target := sc.aps[a.idx].baseUtil + sc.hot(a.idx, el)
 		switch a.band {
 		case "2.4GHz":

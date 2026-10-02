@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -98,5 +99,40 @@ func TestStayFall(t *testing.T) {
 	}
 	if f := stayFall([]int{-60}); f != 0 {
 		t.Fatalf("single reading: %d", f)
+	}
+}
+
+func TestLikelySameAP(t *testing.T) {
+	for _, c := range []struct {
+		a, b string
+		want bool
+	}{
+		{"02:5a:00:01:10:00", "02:5a:00:01:10:10", true},  // sim radios of AP 1
+		{"02:5a:00:01:10:00", "02:5a:00:02:10:00", false}, // different APs
+		{"aa:bb:cc:00:01:5c", "aa:bb:cc:00:01:5d", true},  // adjacent vendor BSSIDs
+		{"aa:bb:cc:00:01:5c", "dd:ee:ff:00:02:fc", false},
+		{"aa:bb:cc:00:01:5c", "aa:bb:cc:00:01:5c", false}, // same BSSID
+	} {
+		if got := likelySameAP(c.a, c.b); got != c.want {
+			t.Errorf("likelySameAP(%s, %s) = %v", c.a, c.b, got)
+		}
+	}
+}
+
+func TestSelectCandidatesBandBalance(t *testing.T) {
+	var in []Candidate
+	for i := range 6 { // six strong 2.4 GHz radios
+		in = append(in, Candidate{BSSID: fmt.Sprintf("aa:%02d", i), Band: "2.4GHz", RSSI: -50 - i})
+	}
+	in = append(in, Candidate{BSSID: "bb:01", Band: "5GHz", RSSI: -66},
+		Candidate{BSSID: "bb:02", Band: "5GHz", RSSI: -70},
+		Candidate{BSSID: "cc:01", Band: "6GHz", RSSI: -72})
+	got := selectCandidates(in, 6)
+	bands := map[string]int{}
+	for _, c := range got {
+		bands[c.Band]++
+	}
+	if bands["5GHz"] != 2 || bands["6GHz"] != 1 || len(got) != 6 {
+		t.Fatalf("bands = %v (n=%d)", bands, len(got))
 	}
 }
