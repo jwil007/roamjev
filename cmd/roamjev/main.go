@@ -154,7 +154,10 @@ func run() error {
 		radio = w
 		gateway = func() string { return fmt.Sprintf("simulated (client at x=%.0f m)", w.Position()) }
 	} else {
-		if pid, ok := roamctlRunning(*iface); ok {
+		if pid, ok := roamctlRunning(*iface); ok && *observe {
+			slog.Info("roamctl is running; observing alongside it (its roams will show as external)",
+				"pid", pid)
+		} else if ok {
 			return fmt.Errorf("roamctl is running on %s (PID %d); stop it first: sudo systemctl stop roamctl@%s",
 				*iface, pid, *iface)
 		}
@@ -163,7 +166,7 @@ func run() error {
 			return fmt.Errorf("connect to wpa_supplicant on %s: %w", *iface, err)
 		}
 		defer func() { _ = c.Close() }()
-		radio = &agent.WPAS{C: c, AllowBTM: *allowBTM}
+		radio = &agent.WPAS{C: c, AllowBTM: *allowBTM, Observe: *observe}
 		prober := linkq.NewARPProber(*iface, ring)
 		go func() {
 			if err := prober.Run(ctx); err != nil {

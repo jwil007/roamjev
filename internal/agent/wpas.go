@@ -18,6 +18,9 @@ type WPAS struct {
 	// AllowBTM leaves 802.11v BSS Transition Management enabled, which lets
 	// the AP steer the client outside the agent's control.
 	AllowBTM bool
+	// Observe leaves wpa_supplicant's settings alone entirely: whatever
+	// normally roams (wpa_supplicant, roamctl) keeps doing so.
+	Observe bool
 }
 
 func (w *WPAS) Link(ctx context.Context) (Link, error) {
@@ -129,6 +132,10 @@ func (w *WPAS) Roam(ctx context.Context, bssid string) (RoamResult, error) {
 // Prepare clears bgscan and (unless AllowBTM) disables BTM, the same way
 // roamctl does, so wpa_supplicant never roams on its own.
 func (w *WPAS) Prepare() (func(), error) {
+	if w.Observe {
+		slog.Info("Observe mode: wpa_supplicant roaming settings left unchanged")
+		return func() {}, nil
+	}
 	stored, err := w.C.GetConfig()
 	if err != nil {
 		return nil, fmt.Errorf("wpa_supplicant GetConfig: %w", err)

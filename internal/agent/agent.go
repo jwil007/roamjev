@@ -298,6 +298,9 @@ func (a *Agent) decide(ctx context.Context, trigger string,
 		return
 	}
 
+	if a.cfg.Observe {
+		a.refreshPassive(ctx, link)
+	}
 	cands := a.buildCandidates(link, now)
 	state := a.buildState(link, cands, now)
 	qs := questions(cands)
@@ -557,4 +560,26 @@ func grade(delta float64, valid bool) string {
 		return "worse"
 	}
 	return "no change"
+}
+
+// refreshPassive reads wpa_supplicant's scan cache without scanning. In
+// observe mode roamjev never scans, so this is how Jev sees candidates:
+// whatever wpa_supplicant (or roamctl) scanned recently. BSS ages come from
+// the cache, and the current AP's cached RSSI anchors the "since scan" fact.
+func (a *Agent) refreshPassive(ctx context.Context, link Link) {
+	res, err := a.radio.ScanResults(ctx, a.ssid)
+	if err != nil || len(res) == 0 {
+		return
+	}
+	a.scan, a.scanAt, a.scanKind = res, time.Now(), "cached (passive)"
+	a.scanBSSID = ""
+	for _, b := range res {
+		if b.BSSID == link.BSSID {
+			a.scanRSSI, a.scanBSSID = b.RSSI, b.BSSID
+		}
+	}
+	if a.scanBSSID == "" {
+		// Current AP not in the cache: say nothing rather than mislead.
+		a.scanRSSI, a.scanBSSID = link.RSSI, link.BSSID
+	}
 }
