@@ -15,35 +15,48 @@ import (
 // neighbor (or RRM-NEIGHBOR-REP-FAILED). APs without 802.11k make the
 // request fail.
 func (c *Client) NeighborReport(ctx context.Context) ([]int, error) {
+	freqs, _, err := c.NeighborReportRaw(ctx, 2*time.Second)
+	return freqs, err
+}
+
+// NeighborReportRaw is NeighborReport that also returns every event seen
+// during the wait, for diagnosing what a real AP and wpa_supplicant send.
+func (c *Client) NeighborReportRaw(ctx context.Context, wait time.Duration) ([]int, []string, error) {
+	var raw []string
 	lctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	events, errc := c.listenEvents(lctx)
 	out, err := c.cmd("NEIGHBOR_REP_REQUEST")
 	if err != nil {
-		return nil, fmt.Errorf("NEIGHBOR_REP_REQUEST: %w", err)
+		return nil, nil, fmt.Errorf("NEIGHBOR_REP_REQUEST: %w", err)
 	}
 	if strings.TrimSpace(string(out)) != "OK" {
-		return nil, fmt.Errorf("NEIGHBOR_REP_REQUEST: %s (AP may not support 802.11k)",
+		return nil, nil, fmt.Errorf("NEIGHBOR_REP_REQUEST: %s (AP may not support 802.11k)",
 			strings.TrimSpace(string(out)))
 	}
 	var freqs []int
-	deadline := time.NewTimer(2 * time.Second)
+	deadline := time.NewTimer(wait)
 	defer deadline.Stop()
 	quiet := time.NewTimer(time.Hour)
 	defer quiet.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, raw, ctx.Err()
 		case err := <-errc:
-			return nil, err
+			return nil, raw, err
 		case <-deadline.C:
-			return freqs, nil
+			return freqs, raw, nil
 		case <-quiet.C:
-			return freqs, nil // the burst of reports is over
+			return freqs, raw, nil // the burst of reports is over
 		case ev := <-events:
-			if strings.Contains(ev, "RRM-NEIGHBOR-REP-FAILED") {
-				return nil, fmt.Errorf("neighbor report failed: %s", strings.TrimSpace(ev))
+			raw = append(raw, strings.TrimSpace(ev))
+			// wpa_supplicant's name is RRM-NEIGHBOR-REP-REQUEST-FAILED; accept
+			// the shorter form too.
+			if strings.Contains(ev, "RRM-NEIGHBOR-REP-REQUEST-FAILED") ||
+				strings.Contains(ev, "RRM-NEIGHBOR-REP-FAILED") {
+				return nil, raw, fmt.Errorf("neighbor report failed (AP did not answer): %s",
+					strings.TrimSpace(ev))
 			}
 			if !strings.Contains(ev, "RRM-NEIGHBOR-REP-RECEIVED") {
 				continue

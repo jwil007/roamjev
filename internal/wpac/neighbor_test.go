@@ -101,3 +101,23 @@ func TestNeighborReportUnsupported(t *testing.T) {
 		t.Fatalf("want an 802.11k-unsupported error, got %v", err)
 	}
 }
+
+// The AP accepts the request but never answers: wpa_supplicant times out
+// and emits RRM-NEIGHBOR-REP-REQUEST-FAILED, which must end the wait.
+func TestNeighborReportTimeout(t *testing.T) {
+	dir := t.TempDir()
+	fakeWPAS(t, dir+"/wlan0", "OK", []string{"<3>RRM-NEIGHBOR-REP-REQUEST-FAILED "})
+	c, err := ConnectAt(dir, dir, "wlan0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+	start := time.Now()
+	_, raw, err := c.NeighborReportRaw(context.Background(), 2*time.Second)
+	if err == nil || !strings.Contains(err.Error(), "did not answer") {
+		t.Fatalf("want a did-not-answer error, got %v", err)
+	}
+	if len(raw) != 1 || time.Since(start) > time.Second {
+		t.Fatalf("raw=%v after %v", raw, time.Since(start))
+	}
+}

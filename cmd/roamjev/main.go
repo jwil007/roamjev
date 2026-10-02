@@ -131,11 +131,18 @@ func run() error {
 			fmt.Printf("connected to %q (%s), key_mgmt %s\n", st.SSID, st.WPAState, st.KeyMgmt)
 		}
 		start := time.Now()
-		freqs, err := c.NeighborReport(ctx)
+		freqs, raw, err := c.NeighborReportRaw(ctx, 4*time.Second)
+		fmt.Printf("events from wpa_supplicant during the wait (%d):\n", len(raw))
+		for _, ev := range raw {
+			fmt.Printf("  %s\n", ev)
+		}
 		if err != nil {
 			return fmt.Errorf("neighbor report: %w", err)
 		}
 		fmt.Printf("neighbor report in %v: %d channel(s)\n", time.Since(start).Round(time.Millisecond), len(freqs))
+		if len(freqs) == 0 && len(raw) == 0 {
+			fmt.Println("no events at all: the AP most likely answered with an empty neighbor list")
+		}
 		for _, f := range freqs {
 			fmt.Printf("  %d MHz\n", f)
 		}
