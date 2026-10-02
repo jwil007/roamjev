@@ -183,3 +183,9 @@ func (w *WPAS) Counters() (uint64, uint64, error) {
 	tx, err := read("tx_bytes")
 	return rx, tx, err
 }
+
+// NeighborFreqs implements NeighborReporter via wpa_supplicant's 802.11k
+// neighbor report request.
+func (w *WPAS) NeighborFreqs(ctx context.Context) ([]int, error) {
+	return w.C.NeighborReport(ctx)
+}

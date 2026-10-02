@@ -20,3 +20,18 @@ func TestRSN(t *testing.T) {
 		t.Fatalf("truncated element parsed: %v", akms)
 	}
 }
+
+func TestParseNeighbor(t *testing.T) {
+	for _, c := range []struct {
+		ev   string
+		want int
+	}{
+		{"<3>RRM-NEIGHBOR-REP-RECEIVED bssid=aa:bb:cc:dd:ee:ff info=0x8f op_class=115 chan=36 phy_type=9", 5180},
+		{"<3>RRM-NEIGHBOR-REP-RECEIVED bssid=aa:bb:cc:dd:ee:01 info=0x8f op_class=81 chan=6 phy_type=7", 2437},
+		{"<3>RRM-NEIGHBOR-REP-RECEIVED bssid=aa:bb:cc:dd:ee:02 info=0x8f op_class=131 chan=37 phy_type=14", 6135},
+	} {
+		if got, ok := parseNeighbor(c.ev); !ok || got != c.want {
+			t.Errorf("parseNeighbor(%q) = %d, %v", c.ev, got, ok)
+		}
+	}
+}
