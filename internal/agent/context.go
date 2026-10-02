@@ -63,6 +63,12 @@ var briefing = map[string]any{
 			"link, a client should stay unless an alternative is " +
 			"substantially and lastingly better. Switching back and forth " +
 			"between options is churn, not improvement.",
+		"A scan of one or two channels takes the radio off channel for " +
+			"roughly 35-70 ms, which a voice call's jitter buffer absorbs: it " +
+			"is inaudible. Only long scans (many channels, seconds) disrupt " +
+			"calls. While moving, a client that stops measuring other APs " +
+			"ends up on a fading link with no known alternative, so brief " +
+			"scans during calls are routine.",
 		"Quick and known scans only re-measure known channels. " +
 			"Neighboring APs often use different channels on 5 and 6 GHz, " +
 			"so as the client moves, APs ahead on new channels are found " +
@@ -222,15 +228,15 @@ func (a *Agent) securityWords(link Link) string {
 
 // scanScopes returns the channel list for each scan action.
 func (a *Agent) scanScopes(link Link, cands []Candidate) (quick, known []int) {
-	// The current channel first (so candidates can be compared with a
-	// same-moment reading of the current AP), then the best candidate on
-	// each band, then the next strongest.
-	quick = append(quick, link.Freq)
+	// Two channels: the best candidate on each band first, then the next
+	// strongest. Kept to two so a quick scan stays short enough (~70 ms) to
+	// be inaudible on a call; candidates from it are compared with the
+	// driver's reading of the current AP taken at scan time.
 	seen := map[int]bool{link.Freq: true}
 	bandDone := map[string]bool{}
-	for pass := 0; pass < 2 && len(quick) < 4; pass++ {
+	for pass := 0; pass < 2 && len(quick) < 2; pass++ {
 		for _, c := range cands { // strongest first
-			if c.Current || seen[c.Freq] || len(quick) >= 4 {
+			if c.Current || seen[c.Freq] || len(quick) >= 2 {
 				continue
 			}
 			if pass == 0 && bandDone[c.Band] {

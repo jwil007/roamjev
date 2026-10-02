@@ -146,7 +146,13 @@ func (a *Agent) buildCandidates(link Link, now time.Time) []Candidate {
 	}
 	ref := func(b BSS) int {
 		if curScan != nil && absDur(curScan.Age-b.Age) <= 2*time.Second {
-			return curScan.RSSI
+			return curScan.RSSI // same scan
+		}
+		// Otherwise the driver's reading of the current AP when the scan
+		// that measured b ran (same moment, if not the same method).
+		if a.scanBSSID == link.BSSID && absDur(now.Sub(a.scanFetched)+b.Age-
+			now.Sub(a.scanAt)) <= 2*time.Second {
+			return a.scanRSSI
 		}
 		return link.RSSI
 	}
