@@ -1,0 +1,14 @@
+[Unit]
+Description=roamjev Wi-Fi roaming with Jev (%i)
+After=network.target
+StartLimitIntervalSec=0
+# roamjev and roamctl both take over wpa_supplicant's roaming on an interface.
+Conflicts=roamctl@%i.service
+
+[Service]
+ExecStart=/usr/local/bin/roamjev -iface %i
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,198 +1,167 @@
 # roamjev
+roamjev is a Linux utility that hands every Wi-Fi roaming and scanning decision to [Jev](https://docs.typesafe.ai), TypeSafe AI's decision model. It is built on [roamctl](https://github.com/jwil007/roamctl) and, like roamctl, works exclusively through the wpa_supplicant control interface, so the rest of your network stack stays as-is.
 
-An experiment: hand **every Wi-Fi roaming and scanning decision** to
-[Jev](https://docs.typesafe.ai), TypeSafe AI's "System One" decision model, and
-measure whether it keeps link quality high.
-
-roamjev is a fork of [roamctl](https://github.com/jwil007/roamctl). It reuses
-roamctl's backend (the wpa_supplicant control-interface client, nl80211 station
-stats, and the bgscan/BTM takeover), but replaces roamctl's tiers, score
-weights and deltas with a loop where Jev decides:
-
-- **when to scan** (and whether a quick targeted scan or a full sweep),
-- **whether to roam**, and
-- **which AP to roam to**.
+roamctl decides with tiers, score weights and hysteresis that you tune. roamjev describes the situation to Jev instead: link quality to the gateway, signal and rates, what the client is doing, how busy the APs are, what each action costs, and what happened after its own recent roams. Jev decides when to scan, how widely, whether to roam, and where. Code measures, describes, executes, and keeps a journal of every decision.
 
 > [!WARNING]
-> Lab tool. It deliberately removes the hand-tuned roaming logic, so expect
-> odd choices — that's what it's for. Decisions depend on a cloud API: if the
-> link is too broken to reach it, the agent simply does nothing.
+> This is an experiment. It needs a TypeSafe API key (Jev is in early access), and every decision is a cloud call: if the link is too broken to reach the API, roamjev does nothing until it can.
+
+![Dashboard](docs/screenshots/dashboard.png)
+
+
+## Quick Start
+
+### One-line install
+Downloads and verifies the latest Linux binary for AMD64, ARM64, or ARM32, asks for your TypeSafe API key, and optionally sets up a systemd service.
+```
+curl -fsSL https://raw.githubusercontent.com/jwil007/roamjev/main/install.sh -o /tmp/install.sh && bash /tmp/install.sh
+```
+The installer checks your key against the API and saves it to `/etc/roamjev/api_key` (readable by root only). The binary goes to `/usr/local/bin/roamjev`.
+
+Run it in the foreground:
+```
+sudo roamjev -iface <iface>
+```
+The dashboard URL is printed as a clickable link. Ctrl+click it to open `http://127.0.0.1:8077`.
+
+Try it without touching your radio. The simulator still makes real Jev calls:
+```
+roamjev -sim -sim-scenario convention
+```
+
+### Build from source
+<details>
+  <summary>Click to expand</summary>
+
+Requires Go 1.25 or newer.
+```
+go install github.com/jwil007/roamjev/cmd/roamjev@latest
+```
+Put your key in `/etc/roamjev/api_key`, or pass it with `-key <file>` or the `TYPESAFE_API_KEY` environment variable.
+</details>
+
+> [!NOTE]
+> roamjev and roamctl can't both control roaming on the same interface. Stop roamctl first (`sudo systemctl stop roamctl@<iface>`). The one exception is `-observe`, which changes nothing and can run alongside roamctl.
+
 
 ## How it works
+Every 3 seconds, and right after every scan, roamjev:
 
+1. **Observes** the link: RSSI, MCS and PHY rate from nl80211; loss, latency and jitter to the gateway from ARP probes; interface traffic; scan results; and the AP's 802.11k neighbor list when it provides one.
+2. **Describes** it to Jev as plain measurements with the arithmetic already done ("+15 dB vs current", "about 1.2x the current link", "falling 12 dB over 10s"), plus a briefing of Wi-Fi facts: how bands differ, that airtime is shared, what scans and roams cost, and that switching back and forth is churn.
+3. **Asks** Jev, in one call, what to do (stay, quick scan, known-channel scan, full scan, or roam), where to roam, how urgent it is, and four yes/no diagnostics.
+4. **Acts** on Jev's top choice. Before a roam it re-measures the target's channel and re-asks Jev if the target moved 6 dB or more.
+
+Code never applies a threshold that triggers or blocks a scan or roam. The only rails are a 5s gap between roams, a 4s gap between scans, a valid target, and a spend cap.
+
+> [!NOTE]
+> When roamjev is running, it disables wpa_supplicant's autonomous roaming (bgscan and BTM). The original configuration is restored when it exits.
+
+### Dashboard
+`http://127.0.0.1:8077`, bound to localhost.
+
+- Live link quality, RSSI, MCS, effective rate, and traffic
+- Four synced timelines, including Jev's action probabilities over time, with scans and roams marked
+- Click any moment to see the exact state Jev was sent and every probability it returned
+- Candidate APs as Jev saw them, a scorecard, and roam outcomes
+
+Every run is also written to a JSON-lines journal (`/var/lib/roamjev/` as root, otherwise `~/.local/state/roamjev/`).
+
+
+## Results so far
+roamjev was compared against roamctl's algorithm (ported as `-policy classic`, using roamctl's own scoring and default config) in four simulated environments, with 10 paired runs per environment where both arms see the identical simulated world. These are results on held-out seeds that were never used for tuning:
+
+| Jev vs classic | Office | Convention | Hospital | Hallway |
+|---|---|---|---|---|
+| Avg MOS on calls | +0.05 | **+0.25** | +0.04 | **+0.16** |
+| Time off channel scanning | 0.96% vs 1.18% | **2.15% vs 6.50%** | **2.92% vs 6.70%** | **1.68% vs 3.02%** |
+| Effective rate | **+172 Mb/s** | +6 Mb/s | −21 Mb/s | even |
+| Time on 2.4 GHz | 0 vs 0 | **0.6% vs 14.3%** | 13% vs 19% | 0 vs 0 |
+
+Jev is at least even everywhere, clearly better on voice in the convention center and hallway, and spends far less airtime scanning. It still roams more than classic in the office and spends more time on weak signal in the sparse hospital corridor. All nine design rounds, including what didn't work, are in [docs/iterations.md](docs/iterations.md).
+
+> [!IMPORTANT]
+> These are simulator results. The simulator models propagation, load, scan dwell, and roam time by security type, but it is not a real network.
+
+
+## Usage
+
+### Daemon mode
+The installer can set this up. To do it by hand, copy `systemd/roamjev@.service` to `/etc/systemd/system/`, then run `sudo systemctl daemon-reload`.
+
+Start the service:
 ```
-         every 3 s, and right after every scan
- ┌──────────────────────────────────────────────────────────────┐
- │ observe   nl80211: RSSI, MCS, bitrates   ARP probes: loss,   │
- │           latency, jitter -> MOS         /proc/net/snmp: TCP │
- │           retransmits    last scan results    roam history   │
- ├──────────────────────────────────────────────────────────────┤
- │ describe  JSON state: raw numbers + code-computed facts      │
- │           ("+9 dB vs current", "falling 7 dB over 10s",      │
- │           "MOS 3.4: poor", "last roam here: MOS 3.1 -> 4.3") │
- ├──────────────────────────────────────────────────────────────┤
- │ ask Jev   one call, questions evaluated in parallel:         │
- │           action  (choice) stay | scan_targeted | scan_full |│
- │                            roam                              │
- │           target  (choice) ap_xxxxxx ... | none              │
- │           urgency (score)  4 levels                          │
- │           link_degraded / better_ap_available /              │
- │           scan_data_stale (noul, yes-probability)            │
- ├──────────────────────────────────────────────────────────────┤
- │ act       do what Jev chose, unless a rail blocks it         │
- │           (every block is logged with its reason)            │
- └──────────────────────────────────────────────────────────────┘
+sudo systemctl start roamjev@<iface>
 ```
-
-### Ground rules: keeping it Jev
-
-This experiment tests a different paradigm, not a better hand-tuned
-algorithm (roamctl already is one). So:
-
-1. **Jev makes every decision.** Code never applies a threshold that
-   triggers or blocks a scan or roam, beyond minimal visible rails (roam
-   and scan gaps, a valid target, an optional pre-roam staleness check
-   that can only re-ask Jev, never decide to stay).
-2. **Improvements go through Jev's channels:** facts and domain knowledge
-   in the briefing, clearer presentation (code does arithmetic and states
-   the result), and question design. Never a hard-coded policy like
-   "roam if the difference exceeds 6 dB".
-3. **Validate cheaply, then confirm.** Presentation changes are first
-   tried on real failure states (send variants of one recorded state and
-   see how Jev's answer moves), then confirmed with a paired simulator
-   batch against the classic arm.
-4. **Log every round** in [docs/iterations.md](docs/iterations.md).
-
-### Why the state is "described", not just dumped
-
-TypeSafe documents that Jev 1.13 reads instructions literally, is weak at
-arithmetic and numeric comparison, and loses accuracy when the state contains
-irrelevant data ([jaggedness notes](https://docs.typesafe.ai/model-jaggedness/jev-1.13.md),
-[state guide](https://docs.typesafe.ai/concepts/state.md)). So code does the
-arithmetic — differences, trends, ages, MOS rating bands — and puts the result
-next to the raw number. Code never applies a threshold that triggers an action;
-that's Jev's job.
-
-Jev is stateless, so the state carries memory: the last few events, and per-AP
-history such as "last roam here 3 min ago: MOS 2.4 -> 4.4 (better)" or failed
-attempts. Jev can see the consequences of its own earlier choices.
-
-### Roam history and ping-pong
-
-Jev is stateless and, per TypeSafe, doesn't count list items reliably, so
-code counts and states the facts instead of handing over a raw roam log:
-
-- per AP (candidates and the current AP): roams to it in the last 10 min,
-  how long ago the client left it, average stay per visit;
-- overall: roams in the last 10 min, and — when the latest changes alternate
-  between the same two APs — a plain statement such as *"the client has
-  switched back and forth between ap_a and ap_b 3 times in the last 2.1 min;
-  average stay 24s"*.
-
-None of this blocks anything (no hysteresis rail); it's information. Jev is
-also asked a diagnostic noul, *"If the client roamed now, would that roam
-likely be short-lived or reversed soon?"*, shown in the UI.
-
-The scorecard counts **ping-pongs** (returning to the previous AP within
-60 s, from the BSSID timeline, so external roams count too), average stay,
-and roams per minute. To test it, `-sim-scenario boundary` parks the client
-midway between two identical APs at about −76 dBm, where shadowing keeps
-swapping which one looks stronger. `-hide-history` removes the history
-facts so the two can be compared.
-
-### Rails (the only places code overrides Jev)
-
-| Rail | Default | Flag |
-|---|---|---|
-| Roam needs action confidence ≥ | 0.5 (TypeSafe's suggested "don't act below" line) | `-min-confidence` |
-| Minimum gap between roams | 5 s | — |
-| Minimum gap between scans | 4 s | — |
-| Roam target must be a scanned AP, not the current one | always | — |
-| Pause Jev after spending | $2.00 per run | `-budget` |
-
-### Measuring link quality
-
-- **MOS to the gateway.** Many gateways ignore ICMP, but every IPv4 gateway
-  must answer ARP, so roamjev sends ARP requests to the gateway ~4×/s over a
-  raw `AF_PACKET` socket and times the replies. Loss, latency and jitter feed
-  the simplified ITU-T G.107 E-model to get a MOS (1.0–4.4). On one Wi-Fi hop
-  latency is tiny, so loss and jitter dominate.
-- **MCS / bitrate** from nl80211 station info (roamctl's netlink code).
-- **Application retries:** TCP retransmitted ÷ sent segments from
-  `/proc/net/snmp`. Host-wide (includes other interfaces) and only meaningful
-  with traffic, so it's shown with the segment count.
-- L2 retry counters aren't used; most drivers don't report them reliably.
-
-Each roam is graded three ways:
-
-- **Before/after:** MOS 15 s before vs 3–18 s after. It's all a real radio
-  can measure, but it is optimistic: roams usually follow a dip, and MOS tends
-  to recover after a dip anyway (regression to the mean), so almost every
-  roam looks "better".
-- **Baseline:** MOS 15–75 s before the roam, so you can see whether the roam
-  beat normal conditions or merely ended a dip.
-- **Vs staying (simulator only):** the simulator keeps generating probes for
-  every AP as if the client were still associated there, so a roam is graded
-  on actual MOS vs what staying would have given over the same window
-  (including the roam's own disruption). This is the verdict the simulator's
-  scorecard uses. Jev itself is only ever shown the before/after grade, since
-  a real radio couldn't know the counterfactual.
-
-`better` / `worse` means a difference above +0.1 / below −0.1 MOS.
-
-## Dashboard
-
-`http://127.0.0.1:8077` (localhost only). Everything is embedded in the binary.
-
-- Live tiles: MOS, loss, latency, jitter, RSSI, MCS, TCP retransmits.
-- Four synced timelines: link quality, signal/MCS, latency/jitter, and
-  **what Jev is thinking** — its action probabilities stacked over time with
-  the three diagnostic yes-probabilities overlaid. Scans and roams are marked
-  on every chart.
-- Decision inspector: click any moment to see the exact state sent, the
-  questions, and every probability Jev returned, plus which rail (if any)
-  blocked it.
-- Candidate table as Jev saw it, scorecard, graded roam outcomes, full log.
-
-## Running
-
-```sh
-mise exec go@1.25 -- go build -o roamjev ./cmd/roamjev
-
-# 1. Simulator: a hallway of APs, real Jev calls, no radio involved.
-./roamjev -sim                       # dashboard on :8077
-
-# 2. Observe: Jev decides, nothing is executed.
-sudo systemctl stop roamctl@wlp1s0
-sudo ./roamjev -iface wlp1s0 -observe
-
-# 3. Live: Jev drives the radio.
-sudo ./roamjev -iface wlp1s0
-
-# Review a past run (no radio, no API calls).
-./roamjev -replay /var/lib/roamjev/<run>.jsonl
-
-# Scorecards for one or more runs, side by side.
-./roamjev -summary run1.jsonl run2.jsonl
-
-# Ping-pong A/B in the simulator.
-./roamjev -sim -sim-scenario boundary
-./roamjev -sim -sim-scenario boundary -hide-history -listen 127.0.0.1:8078
-
-# Check the gateway ARP probe alone (no Jev, no wpa_supplicant changes).
-sudo ./roamjev -iface wlp1s0 -probe-test
+View logs:
+```
+journalctl -u roamjev@<iface> -f
+```
+Enable at boot:
+```
+sudo systemctl enable roamjev@<iface>
 ```
 
-API key lookup order: `$TYPESAFE_API_KEY`, `-key FILE`, `/etc/roamjev/api_key`,
-`~/.config/roamctl-jev/api_key` (of `$SUDO_USER` when run with sudo).
+### Foreground mode
+Connect to an SSID, then run `sudo roamjev -iface <iface>`. Exit with `ctrl+c`.
 
-Every run writes a JSONL journal (`/var/lib/roamjev/` as root, else
-`~/.local/state/roamjev/`) with every tick, decision (full state + answers),
-action, outcome and event.
+### Observe mode
+`sudo roamjev -iface <iface> -observe` asks Jev on every cycle but executes nothing and leaves wpa_supplicant's settings alone. It can run alongside roamctl, whose roams show up in the log as external.
+
+### Simulator and comparisons
+```
+roamjev -sim -sim-scenario hospital                     # simulated environment, real Jev calls
+roamjev -sim -sim-scenario hospital -policy classic     # roamctl's algorithm in the same world
+roamjev -sim -sim-seed 7 ...                            # same seed = identical world for both arms
+roamjev -compare ~/.local/state/roamjev/*.jsonl         # paired comparison of runs
+roamjev -summary <journal.jsonl>                        # scorecard for one run
+roamjev -replay <journal.jsonl>                         # dashboard for a recorded run
+```
+Scenarios: `office`, `convention`, `hospital`, `hallway`, `boundary`.
+
+### Flags
+Run with `sudo roamjev -<ARG> <value>`.
+
+`-iface`: Wireless interface. Default is `wlan0`.
+
+`-observe`: Ask Jev but execute nothing.
+
+`-listen`: Dashboard address. Default is `127.0.0.1:8077`.
+
+`-budget`: Pause Jev calls after this many USD in one run. Default is `2`. Use `0` for no limit (recommended for a long-running service).
+
+`-interval`: Time between decisions. Default is `3s`.
+
+`-verify-roam`: Re-measure the target's channel before each roam. Default is on.
+
+`-min-confidence`: Only roam when Jev's action confidence is at least this. Default is `0` (act on Jev's top choice).
+
+`-key`: API key file. Default lookup is `$TYPESAFE_API_KEY`, then `/etc/roamjev/api_key`.
+
+`-model`: Jev model ID. Default is `jev-1.13.0`.
+
+`-allow-btm`: Leave 802.11v BTM enabled, which lets APs steer the client.
+
+`-probe-test`: Run only the gateway ARP probe for 10s and print loss, latency, jitter and MOS.
+
+`-neighbor-test`: Ask the current AP for its 802.11k neighbor list and print the raw result.
+
+`-level`: Log level, `info` or `debug`.
+
+Run `roamjev -h` for the simulator and comparison flags.
+
+### Uninstall
+This one line command removes the binary, key, journals, and service configuration.
+```
+UNITS=$(systemctl list-units 'roamjev@*' --no-legend | awk '{print $1}'); [ -n "$UNITS" ] && sudo systemctl stop $UNITS && sudo systemctl disable $UNITS; sudo rm -f /etc/systemd/system/roamjev@.service; sudo systemctl daemon-reload; sudo rm -rf /etc/roamjev /var/lib/roamjev /usr/local/share/roamjev /usr/local/bin/roamjev
+```
+
 
 ## Cost
+Jev costs $0.042 per million input tokens and output is free ([TypeSafe models](https://docs.typesafe.ai/models.md)). A decision is about 3,000-4,500 tokens, roughly $0.0001-0.0002, so continuous use costs about $2-4 per day. The default `-budget` pauses Jev after $2 in a single run.
 
-Jev costs $0.042 per million input tokens; output is free
-([models](https://docs.typesafe.ai/models.md)). A decision with six candidates
-is ~2,000 tokens ≈ $0.00008. At one decision every 3 s that's ≈ $2.40/day of
-continuous running.
+
+## Notes
+- **Gateway probing:** roamjev sends ARP requests to the gateway 4 times a second to measure loss, latency and jitter (every IPv4 gateway answers ARP, unlike ICMP). That is about 0.16% of airtime per client, which is negligible for one machine but adds up if many clients share a channel, and it keeps the radio out of power save.
+- **802.11k neighbor reports:** vendor support is mixed. Some APs advertise 802.11k but don't answer requests, and lists can be incomplete. roamjev treats the list as a hint.
+- **wpa_supplicant 6 GHz support:** as with roamctl, wpa_supplicant v2.10 (common on Debian-based distros) may not reliably find 6 GHz APs. v2.11 or newer is recommended for 6 GHz.

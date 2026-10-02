@@ -45,7 +45,7 @@ func run() error {
 	simScenario := flag.String("sim-scenario", "hallway", "hallway, boundary, office, convention, hospital")
 	policyName := flag.String("policy", "jev", "decider: jev, or classic (roamctl's algorithm with its default config)")
 	simSeed := flag.Uint64("sim-seed", 0, "simulator seed; runs with the same seed see the identical world (0 = random)")
-	verifyRoam := flag.Bool("verify-roam", false, "re-measure the target's channel right before each roam; cancel if gone, re-decide if it moved 6+ dB")
+	verifyRoam := flag.Bool("verify-roam", true, "re-measure the target's channel right before each roam; cancel if gone, re-decide if it moved 6+ dB")
 	hideHistory := flag.Bool("hide-history", false, "experiment control: omit roam-count, dwell and ping-pong facts from Jev's state")
 	replay := flag.String("replay", "", "serve the dashboard for a recorded journal (no radio, no Jev)")
 	listen := flag.String("listen", "127.0.0.1:8077", "dashboard address")
@@ -161,6 +161,7 @@ func run() error {
 		srv := web.Serve(*listen, store)
 		slog.Info("Replaying journal", "file", *replay,
 			"dashboard", "http://"+*listen)
+		printDashboardLink(*listen)
 		<-ctx.Done()
 		return srv.Close()
 	}
@@ -282,6 +283,7 @@ func run() error {
 	defer func() { _ = srv.Close() }()
 	slog.Info("roamjev started", "mode", mode, "iface", *iface,
 		"policy", policy.Name(), "model", modelName, "seed", seed, "dashboard", "http://"+*listen, "journal", journal)
+	printDashboardLink(*listen)
 
 	a := agent.New(cfg, radio, ring, policy, store)
 	a.Gateway = gateway
@@ -376,4 +378,20 @@ func runProbeTest(ctx context.Context, iface string) error {
 				time.Since(start).Seconds(), w.Sent, w.Lost, w.LatencyMs, w.JitterMs, w.MOS)
 		}
 	}
+}
+
+// printDashboardLink prints the dashboard URL as a clickable terminal
+// hyperlink (OSC 8), which most modern terminals open in the browser on
+// Ctrl+click, as the desktop user even when roamjev runs under sudo. Under
+// systemd or a pipe it prints nothing extra: the URL is already in the log.
+func printDashboardLink(listen string) {
+	fi, err := os.Stderr.Stat()
+	if err != nil || fi.Mode()&os.ModeCharDevice == 0 {
+		return
+	}
+	url := "http://" + listen
+	if host, port, ok := strings.Cut(listen, ":"); ok && (host == "" || host == "0.0.0.0") {
+		url = "http://127.0.0.1:" + port
+	}
+	_, _ = fmt.Fprintf(os.Stderr, "\n  Dashboard: \x1b]8;;%s\x1b\\\x1b[1;4m%s\x1b[0m\x1b]8;;\x1b\\  (Ctrl+click to open)\n\n", url, url)
 }
