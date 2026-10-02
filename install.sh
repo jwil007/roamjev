@@ -47,7 +47,8 @@ SKIP_BINARY=false
 if command -v $BINARY_NAME &>/dev/null; then
   INSTALLED=$($BINARY_NAME -version 2>/dev/null || echo "unknown")
   echo "Installed version: $INSTALLED"
-  if [ "$INSTALLED" = "$LATEST" ]; then
+  # The binary reports 0.1.0; release tags are v0.1.0.
+  if [ "v${INSTALLED#v}" = "$LATEST" ]; then
     echo "Binary already up to date."
     SKIP_BINARY=true
   fi
