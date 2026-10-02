@@ -130,7 +130,7 @@ func (a *Agent) historyLine(bssid string, now time.Time, current bool) string {
 
 func (a *Agent) buildCandidates(link Link, now time.Time) []Candidate {
 	var out []Candidate
-	scanAge := now.Sub(a.scanAt)
+	scanAge := now.Sub(a.scanFetched)
 	for _, b := range a.scan {
 		c := Candidate{
 			ID: apID(b.BSSID), BSSID: b.BSSID, Band: b.Band,
@@ -349,7 +349,14 @@ func (a *Agent) buildState(link Link, cands []Candidate, now time.Time) map[stri
 // so each candidate is offered under its stable ap_xxxxxx id. Action options
 // use TypeSafe's structured criteria (what / not_for) to carry what each
 // option is for; costs live in the state's action_costs.
-func questions(cands []Candidate) map[string]jev.Question {
+func questions(cands []Candidate, verify bool) map[string]jev.Question {
+	roamWhat := "Move to a different AP now, using the current candidate " +
+		"measurements"
+	if verify {
+		roamWhat += "; the client automatically re-measures the target's " +
+			"channel right before roaming (one channel, tens of ms) and " +
+			"cancels if the target has faded or vanished"
+	}
 	targets := map[string]string{
 		"none": "No candidate would give this client a better experience " +
 			"than the current AP",
@@ -389,10 +396,7 @@ func questions(cands []Candidate) map[string]jev.Question {
 						"ones not seen before (most expensive scan)",
 					"not_for": "refreshing APs that are already known",
 				},
-				"roam": map[string]string{
-					"what": "Move to a different AP now, using the current " +
-						"candidate measurements",
-				},
+				"roam": map[string]string{"what": roamWhat},
 			}},
 		"target": jev.Choice(
 			"If the client roamed now, which AP would give it the best "+

@@ -45,6 +45,7 @@ func run() error {
 	simScenario := flag.String("sim-scenario", "hallway", "hallway, boundary, office, convention, hospital")
 	policyName := flag.String("policy", "jev", "decider: jev, or classic (roamctl's algorithm with its default config)")
 	simSeed := flag.Uint64("sim-seed", 0, "simulator seed; runs with the same seed see the identical world (0 = random)")
+	verifyRoam := flag.Bool("verify-roam", false, "re-measure the target's channel right before each roam; cancel if gone, re-decide if it moved 6+ dB")
 	hideHistory := flag.Bool("hide-history", false, "experiment control: omit roam-count, dwell and ping-pong facts from Jev's state")
 	replay := flag.String("replay", "", "serve the dashboard for a recorded journal (no radio, no Jev)")
 	listen := flag.String("listen", "127.0.0.1:8077", "dashboard address")
@@ -139,7 +140,8 @@ func run() error {
 		jc := jev.New(key)
 		jc.Model = *model
 		modelName = jc.Model
-		policy = &agent.JevPolicy{Client: jc, Timeout: *jevTimeout}
+		policy = &agent.JevPolicy{Client: jc, Timeout: *jevTimeout,
+			VerifyRoam: *verifyRoam}
 	case "classic":
 		ccfg, err := config.Default()
 		if err != nil {
@@ -159,6 +161,7 @@ func run() error {
 	cfg.MaxCandidates = *maxCands
 	cfg.Observe = *observe
 	cfg.HideHistory = *hideHistory
+	cfg.VerifyRoam = *verifyRoam
 
 	mode := "live"
 	if *simMode {
@@ -170,6 +173,9 @@ func run() error {
 	}
 	if *hideHistory {
 		mode += "+nohistory"
+	}
+	if *verifyRoam {
+		mode += "+verify"
 	}
 	if *policyName != "jev" {
 		mode += "+" + *policyName

@@ -60,6 +60,8 @@ type PolicyEvent struct {
 type JevPolicy struct {
 	Client  *jev.Client
 	Timeout time.Duration
+	// VerifyRoam tells Jev that roams are checked automatically first.
+	VerifyRoam bool
 }
 
 func (p *JevPolicy) Name() string { return "jev" }
@@ -67,7 +69,7 @@ func (p *JevPolicy) Name() string { return "jev" }
 func (p *JevPolicy) Notify(PolicyEvent) {}
 
 func (p *JevPolicy) Decide(ctx context.Context, in PolicyInput) (PolicyOutput, error) {
-	qs := questions(in.Cands)
+	qs := questions(in.Cands, p.VerifyRoam)
 	out := PolicyOutput{UsedJev: true, Questions: qs,
 		TargetIDs: candidateIDs(in.Cands)}
 	cctx, cancel := context.WithTimeout(ctx, p.Timeout)

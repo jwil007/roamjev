@@ -37,6 +37,13 @@ type Config struct {
 	// HideHistory leaves out the roam-count / dwell / ping-pong facts, as
 	// the control arm of an A/B comparison.
 	HideHistory bool
+	// VerifyRoam re-measures the target's channel right before every roam
+	// (one channel, ~35-105 ms). If the target is gone, the roam is
+	// cancelled; if its signal moved by VerifyDeltaDB or more from what the
+	// decider saw, the roam is cancelled and the decider is asked again
+	// with the fresh reading. It never decides on its own to stay.
+	VerifyRoam    bool
+	VerifyDeltaDB int
 }
 
 func DefaultConfig() Config {
@@ -51,6 +58,7 @@ func DefaultConfig() Config {
 		RoamMinConfidence: 0,
 		MinRoamGap:        5 * time.Second,
 		MinScanGap:        4 * time.Second,
+		VerifyDeltaDB:     6,
 		BudgetUSD:         2,
 	}
 }
@@ -69,6 +77,9 @@ type Agent struct {
 	scan       []BSS
 	scanAt     time.Time
 	scanKind   string
+	// scanFetched is when a.scan was last read from the radio; each BSS's
+	// Age is relative to that moment.
+	scanFetched time.Time
 	// scanRSSI is the current AP's RSSI when the last scan ran, so the state
 	// can say how much the client's situation changed since.
 	scanRSSI  int
@@ -412,6 +423,12 @@ func (a *Agent) decide(ctx context.Context, trigger string,
 		a.doScan(ctx, d, link, cands)
 		again <- "scan_complete"
 	case "roam":
+		if a.cfg.VerifyRoam {
+			if why := a.verifyTarget(ctx, d, link); why != "" {
+				again <- why
+				return
+			}
+		}
 		a.doRoam(ctx, d, link)
 	}
 }
@@ -479,6 +496,7 @@ func (a *Agent) doScan(ctx context.Context, d Decision, link Link,
 		res, err = a.radio.ScanResults(ctx, a.ssid)
 		if err == nil {
 			a.scan, a.scanAt, a.scanKind = res, time.Now(), kind
+			a.scanFetched = a.scanAt
 			a.scanRSSI, a.scanBSSID = link.RSSI, link.BSSID
 			act.Found = len(res)
 			act.Success = true
@@ -611,6 +629,7 @@ func (a *Agent) refreshPassive(ctx context.Context, link Link) {
 		return
 	}
 	a.scan, a.scanAt, a.scanKind = res, time.Now(), "cached (passive)"
+	a.scanFetched = a.scanAt
 	a.scanBSSID = ""
 	for _, b := range res {
 		if b.BSSID == link.BSSID {
@@ -621,4 +640,64 @@ func (a *Agent) refreshPassive(ctx context.Context, link Link) {
 		// Current AP not in the cache: say nothing rather than mislead.
 		a.scanRSSI, a.scanBSSID = link.RSSI, link.BSSID
 	}
+}
+
+// verifyTarget scans just the target's channel before a roam. It returns a
+// re-decide trigger when the roam should not go ahead as decided, or "" to
+// proceed. Scan readings carry a few dB of noise, so only a change of
+// VerifyDeltaDB or more counts as the data having moved.
+func (a *Agent) verifyTarget(ctx context.Context, d Decision, link Link) string {
+	seen, freq := 0, 0
+	for _, b := range a.scan {
+		if b.BSSID == d.Target {
+			seen, freq = b.RSSI, b.Freq
+		}
+	}
+	if freq == 0 {
+		return "" // nothing to verify against; let the roam proceed
+	}
+	a.setBusy("checking target")
+	start := time.Now()
+	err := a.radio.Scan(ctx, []int{freq})
+	dur := time.Since(start)
+	act := Action{T: start, DecisionID: d.ID, Kind: "scan_verify",
+		Freqs: []int{freq}, Target: d.Target,
+		DurationMs: float64(dur.Microseconds()) / 1000}
+	var res []BSS
+	if err == nil {
+		res, err = a.radio.ScanResults(ctx, a.ssid)
+	}
+	a.setBusy("")
+	if err != nil {
+		act.Message = err.Error()
+		a.store.AddAction(act)
+		return "" // couldn't check; don't block the decision on it
+	}
+	a.learnScanCost([]int{freq}, dur)
+	act.Success = true
+	a.scan, a.scanFetched = res, time.Now()
+	now := -999
+	for _, b := range res {
+		if b.BSSID == d.Target && b.Age < 2*time.Second {
+			now = b.RSSI
+		}
+	}
+	switch {
+	case now == -999:
+		act.Message = "target not heard; roam cancelled"
+		a.addRecent("pre-roam check: %s not heard on its channel; roam "+
+			"cancelled", apID(d.Target))
+		a.store.AddAction(act)
+		return "verify_gone"
+	case now-seen >= a.cfg.VerifyDeltaDB || seen-now >= a.cfg.VerifyDeltaDB:
+		act.Message = fmt.Sprintf("target now %d dBm (decided on %d); "+
+			"asking again", now, seen)
+		a.addRecent("pre-roam check: %s re-measured at %d dBm (was %d); "+
+			"roam re-evaluated", apID(d.Target), now, seen)
+		a.store.AddAction(act)
+		return "verify_changed"
+	}
+	act.Message = fmt.Sprintf("target %d dBm (decided on %d); roaming", now, seen)
+	a.store.AddAction(act)
+	return ""
 }
