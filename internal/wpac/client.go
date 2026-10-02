@@ -8,11 +8,18 @@ import (
 )
 
 func Connect(iface string) (*Client, error) {
-	remotePath := "/var/run/wpa_supplicant/" + iface
-	localPathCmd := "/tmp/wpa_ctrl_" + strconv.Itoa(os.Getpid()) + "command"
-	localPathEvent := "/tmp/wpa_ctrl_" + strconv.Itoa(os.Getpid()) + "event"
-	localPathPoll := "/tmp/wpa_ctrl_" + strconv.Itoa(os.Getpid()) + "poll"
-	localPathWatch := "/tmp/wpa_ctrl_" + strconv.Itoa(os.Getpid()) + "watch"
+	return ConnectAt("/var/run/wpa_supplicant", "/tmp", iface)
+}
+
+// ConnectAt connects to the control socket ctrlDir/iface, creating this
+// process's local sockets in localDir. Tests use it with a fake server.
+func ConnectAt(ctrlDir, localDir, iface string) (*Client, error) {
+	remotePath := ctrlDir + "/" + iface
+	base := localDir + "/wpa_ctrl_" + strconv.Itoa(os.Getpid())
+	localPathCmd := base + "command"
+	localPathEvent := base + "event"
+	localPathPoll := base + "poll"
+	localPathWatch := base + "watch"
 
 	laddrC := &net.UnixAddr{
 		Name: localPathCmd,
@@ -66,6 +73,7 @@ func Connect(iface string) (*Client, error) {
 		_ = cc.Close()
 		_ = ec.Close()
 		_ = pc.Close()
+		return nil, fmt.Errorf("net.DialUnix: %w", err)
 	}
 	return &Client{
 		CC:             cc,

@@ -62,6 +62,7 @@ func run() error {
 	level := flag.String("level", "info", "log level: debug, info")
 	compare := flag.Bool("compare", false, "paired comparison of simulator journals given as arguments (same seed = same world)")
 	summary := flag.Bool("summary", false, "print a scorecard for each journal given as an argument, then exit")
+	neighborTest := flag.Bool("neighbor-test", false, "ask the current AP for its 802.11k neighbor report and print it (needs root; changes nothing)")
 	probeTest := flag.Bool("probe-test", false, "run only the ARP gateway probe for 10 s and print results (needs root)")
 	showVersion := flag.Bool("version", false, "print version")
 	flag.Parse()
@@ -115,6 +116,28 @@ func run() error {
 			}
 			agent.Summarize(st).Print(os.Stdout, filepath.Base(f))
 			fmt.Println()
+		}
+		return nil
+	}
+
+	if *neighborTest {
+		c, err := wpac.Connect(*iface)
+		if err != nil {
+			return fmt.Errorf("connect to wpa_supplicant on %s: %w", *iface, err)
+		}
+		defer func() { _ = c.Close() }()
+		st, err := c.GetStatus()
+		if err == nil {
+			fmt.Printf("connected to %q (%s), key_mgmt %s\n", st.SSID, st.WPAState, st.KeyMgmt)
+		}
+		start := time.Now()
+		freqs, err := c.NeighborReport(ctx)
+		if err != nil {
+			return fmt.Errorf("neighbor report: %w", err)
+		}
+		fmt.Printf("neighbor report in %v: %d channel(s)\n", time.Since(start).Round(time.Millisecond), len(freqs))
+		for _, f := range freqs {
+			fmt.Printf("  %d MHz\n", f)
 		}
 		return nil
 	}
