@@ -15,6 +15,10 @@ type Summary struct {
 	AvgMOS        float64
 	PctGood       float64 // share of connected seconds with MOS >= 4.03
 	PctDown       float64
+	AvgRxMbps     float64 // PHY rate: what the link could carry
+	AvgRSSI       float64
+	PctWeak       float64 // share of connected seconds below -75 dBm
+	PctLowMCS     float64 // share of connected seconds at rx MCS <= 3
 	APChanges     int
 	PingPongs     int // quick return (<= 60 s) where the AP left hadn't faded
 	Justified     int // quick return after the AP left fell >= PingPongFallDB
@@ -48,8 +52,8 @@ func Summarize(s *Store) Summary {
 	if n := len(snap.Ticks); n > 1 {
 		sum.Duration = snap.Ticks[n-1].T.Sub(snap.Ticks[0].T)
 	}
-	var mosSum float64
-	var conn, good, down int
+	var mosSum, rateSum, rssiSum float64
+	var conn, good, down, linked, weak, lowMCS int
 	type change struct {
 		t        time.Time
 		from, to string
@@ -75,6 +79,15 @@ func Summarize(s *Store) Summary {
 			joined = t.T
 		}
 		stayRSSI = append(stayRSSI, t.RSSI)
+		linked++
+		rateSum += t.RxMbps
+		rssiSum += float64(t.RSSI)
+		if t.RSSI < -75 {
+			weak++
+		}
+		if t.RxMCS <= 3 {
+			lowMCS++
+		}
 		if t.MOS > 0 {
 			conn++
 			mosSum += t.MOS
@@ -90,6 +103,12 @@ func Summarize(s *Store) Summary {
 	}
 	if n := len(snap.Ticks); n > 0 {
 		sum.PctDown = 100 * float64(down) / float64(n)
+	}
+	if linked > 0 {
+		sum.AvgRxMbps = rateSum / float64(linked)
+		sum.AvgRSSI = rssiSum / float64(linked)
+		sum.PctWeak = 100 * float64(weak) / float64(linked)
+		sum.PctLowMCS = 100 * float64(lowMCS) / float64(linked)
 	}
 	sum.APChanges = len(changes)
 	for i := 1; i < len(changes); i++ {
@@ -194,6 +213,7 @@ func (s Summary) Print(w io.Writer, name string) {
 	_, _ = fmt.Fprintf(w, "%s  [%s]\n", name, s.Mode)
 	p("duration", "%s", s.Duration.Round(time.Second))
 	p("average MOS", "%.2f  (%.0f%% of time good, %.1f%% disconnected)", s.AvgMOS, s.PctGood, s.PctDown)
+	p("signal and rate", "avg RSSI %.1f dBm, avg rx PHY rate %.0f Mb/s, %.1f%% of time below -75 dBm, %.1f%% at MCS <= 3", s.AvgRSSI, s.AvgRxMbps, s.PctWeak, s.PctLowMCS)
 	p("AP changes", "%d  (ping-pongs: %d, justified quick returns: %d, average stay %s)", s.APChanges, s.PingPongs, s.Justified, s.AvgStay.Round(time.Second))
 	p("roams", "%d ok, %d failed", s.RoamsOK, s.RoamsFailed)
 	basis := "before/after"

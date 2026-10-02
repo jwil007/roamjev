@@ -59,6 +59,7 @@ func run() error {
 	observe := flag.Bool("observe", false, "ask Jev but never act (wpa_supplicant keeps roaming normally)")
 	allowBTM := flag.Bool("allow-btm", false, "leave 802.11v BTM enabled (lets APs steer the client)")
 	level := flag.String("level", "info", "log level: debug, info")
+	compare := flag.Bool("compare", false, "paired comparison of simulator journals given as arguments (same seed = same world)")
 	summary := flag.Bool("summary", false, "print a scorecard for each journal given as an argument, then exit")
 	probeTest := flag.Bool("probe-test", false, "run only the ARP gateway probe for 10 s and print results (needs root)")
 	showVersion := flag.Bool("version", false, "print version")
@@ -79,6 +80,25 @@ func run() error {
 	ctx, cancel := signal.NotifyContext(context.Background(),
 		os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+
+	if *compare {
+		runs := map[agent.RunKey]agent.Summary{}
+		for _, f := range flag.Args() {
+			st, err := agent.LoadJournal(f)
+			if err != nil {
+				return fmt.Errorf("%s: %w", f, err)
+			}
+			info := st.Snapshot().Info
+			scen := strings.SplitN(strings.TrimPrefix(info.Mode, "sim-"), "+", 2)[0]
+			pol := info.Policy
+			if pol == "" {
+				pol = "jev"
+			}
+			runs[agent.RunKey{Scenario: scen, Seed: info.SimSeed, Policy: pol}] = agent.Summarize(st)
+		}
+		agent.Compare(os.Stdout, runs)
+		return nil
+	}
 
 	if *summary {
 		for _, f := range flag.Args() {
