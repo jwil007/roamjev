@@ -422,11 +422,11 @@ func (a *Agent) decide(ctx context.Context, trigger string,
 	switch d.Executed {
 	case "scan_quick", "scan_known", "scan_full":
 		a.doScan(ctx, d, link, cands)
-		again <- "scan_complete"
+		retrigger(again, "scan_complete")
 	case "roam":
 		if a.cfg.VerifyRoam {
 			if why := a.verifyTarget(ctx, d, link); why != "" {
-				again <- why
+				retrigger(again, why)
 				return
 			}
 		}
@@ -701,4 +701,15 @@ func (a *Agent) verifyTarget(ctx context.Context, d Decision, link Link) string 
 	act.Message = fmt.Sprintf("target %d dBm (decided on %d); roaming", now, seen)
 	a.store.AddAction(act)
 	return ""
+}
+
+// retrigger asks the loop for another decision right away. It never blocks:
+// the loop goroutine is the only receiver, so a blocking send while a
+// trigger is already queued would deadlock it. A queued trigger already
+// guarantees the next decision, so dropping the extra one loses nothing.
+func retrigger(again chan<- string, why string) {
+	select {
+	case again <- why:
+	default:
+	}
 }

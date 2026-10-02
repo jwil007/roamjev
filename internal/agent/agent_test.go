@@ -55,3 +55,23 @@ func TestBandChannel(t *testing.T) {
 		}
 	}
 }
+
+// Two retriggers in a row must not block (the second used to deadlock the
+// decision loop when a scan and a pre-roam check both asked to re-decide).
+func TestRetriggerNeverBlocks(t *testing.T) {
+	ch := make(chan string, 1)
+	done := make(chan struct{})
+	go func() {
+		retrigger(ch, "scan_complete")
+		retrigger(ch, "verify_changed")
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("retrigger blocked")
+	}
+	if got := <-ch; got != "scan_complete" {
+		t.Fatalf("queued trigger = %q", got)
+	}
+}
