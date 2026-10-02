@@ -495,7 +495,10 @@ func questions(cands []Candidate, verify bool) map[string]jev.Question {
 					"what": roamWhat,
 					"not_for": "switching back to an AP the client left " +
 						"within the last minute or so, unless its situation " +
-						"has clearly changed since; that is ping-pong",
+						"has clearly changed since; that is ping-pong; or " +
+						"changing band for a gain of a few dB when the " +
+						"current link shows no loss and the alternative's " +
+						"estimated rate is lower",
 				},
 			}},
 		"target": jev.Choice(
