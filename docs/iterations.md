@@ -19,4 +19,13 @@ convention (dense, 55-95% load, PSK without FT), hospital (corridor,
 | cmp10 | v8: roam option gets not_for "switching back to an AP left within the last minute or so unless its situation has clearly changed; that is ping-pong" (screen: roam-backs 84% → 42%). SNR tried and dropped (no effect; noise is faked on most radios) | Jev ≥ classic on every primary measure in all four; voice +0.23 / +0.18 / +0.11 (10/10, 9/10, 10/10) in convention / hospital / hallway, office tie. Convention downloads +58 Mb/s (8/10). Flip-backs 16 → 0 in hallway; ping-pong 1.8 → 0.4. Still ~3 more roams per 8 min than classic (mostly 6 GHz upgrades) |
 | holdout | v8 unchanged on fresh seeds 301-310 (never used for tuning) | Gains hold: voice +0.37 / +0.17 / +0.09 in convention / hospital / hallway (10/10, 9/10, 8/10), office +0.04 (8/10); convention downloads 163 vs 76 Mb/s; office effective rate +244 Mb/s and 88% on 6 GHz vs 53%; off-channel ¼-¾ of classic. But 9 office flip-backs: 6→5 GHz downgrades on healthy links (0% loss, +2-5 dB, ~half the estimated rate) |
 | cmp11 | v9: roam not_for also covers "changing band for a gain of a few dB when the current link shows no loss and the alternative's estimated rate is lower" (screen on tuning seeds: rate-lowering band roams 80% → 54%) | About even with v8. Hallway better behaved (roams 13.0 vs classic 13.8, worse-graded 1.7 vs 1.8; voice +0.13 10/10); office flip-backs unchanged (5). Convention downloads swung +58 → −85 Mb/s, but classic's own number moved 114 → 159 with identical code and seeds: the download metric is too noisy at this sample size. Plateau; v9 chosen as final |
-| holdout-v9 | v9 on held-out seeds 301-310 | running |
+| holdout-v9 | v9 on held-out seeds 301-310 | Final. Voice +0.25 convention (10/10), +0.16 hallway (9/10), +0.05 office (7/10), +0.04 hospital (5/10, tie). Off-channel time ⅓-¾ of classic everywhere. Effective rate +172 office, +6 convention, even hallway, −21 hospital. Flip-backs 2/0/1/1 (classic 0). Weakness: hospital time below -75 dBm 22% vs 10%; office roams 4.0 vs 2.1. v8 holdout had higher convention/hospital voice but 9 office flip-backs; v9 kept |
+
+## Where it stands
+
+Jev (v9) is at least even with roamctl's default algorithm on every primary
+measure in all four simulated environments, clearly better on voice in the
+convention center and hallway, and spends far less airtime scanning. It still
+roams more than classic in the office and lingers on weak signal in the sparse
+hospital corridor. Real-radio comparison is the next step. Total Jev spend
+for all simulation rounds: about $14.
