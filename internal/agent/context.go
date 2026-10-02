@@ -58,13 +58,11 @@ var briefing = map[string]any{
 			"network needs a full handshake (about 100-250 ms) and an " +
 			"802.1X network a full authentication (often 0.3-1 s, " +
 			"sometimes more).",
-		"An AP usually has several co-located radios (2.4, 5, 6 GHz) " +
-			"that a client sees as separate BSSIDs. Co-located radios fade " +
-			"together, so their relationship stays roughly fixed wherever " +
-			"the client is (5 and 6 GHz typically differ by 1-2 dB). A good " +
-			"client picks the best band when it joins an AP, preferring 6 " +
-			"GHz at comparable signal, and sticks with it; switching between " +
-			"radios of the same AP is churn, not improvement.",
+		"Small differences in signal or estimated rate, especially " +
+			"between bands, are not worth a roam. Once on a good 5 or 6 GHz " +
+			"link, a client should stay unless an alternative is " +
+			"substantially and lastingly better. Switching back and forth " +
+			"between options is churn, not improvement.",
 		"Signal readings from a scan are snapshots; if the client is " +
 			"moving they drift within seconds. Waiting for perfectly fresh " +
 			"readings while moving can mean never acting: a reading a few " +
@@ -433,37 +431,4 @@ func trafficClass(kbps float64) string {
 	default:
 		return "heavy traffic (downloads, uploads)"
 	}
-}
-
-// likelySameAP guesses whether two BSSIDs are radios of one physical AP.
-// Vendors usually derive them from one base MAC, so they share the first
-// four octets and differ by a small amount in the last two. A heuristic:
-// the 802.11 Reduced Neighbor Report's co-located flag is the proper
-// source, and parsing it is a follow-up for live radios.
-func likelySameAP(a, b string) bool {
-	if a == b || len(a) != 17 || len(b) != 17 || a[:11] != b[:11] {
-		return false
-	}
-	var x, y uint64
-	if _, err := fmt.Sscanf(strings.ReplaceAll(a[12:], ":", ""), "%x", &x); err != nil {
-		return false
-	}
-	if _, err := fmt.Sscanf(strings.ReplaceAll(b[12:], ":", ""), "%x", &y); err != nil {
-		return false
-	}
-	d := int64(x) - int64(y)
-	return d > -256 && d < 256
-}
-
-// sameAPSwitches counts recent roams between radios of one physical AP.
-func (a *Agent) sameAPSwitches(now time.Time) int {
-	n := 0
-	for i := 1; i < len(a.visits); i++ {
-		v := a.visits[i]
-		if now.Sub(v.joined) <= historyWindow &&
-			likelySameAP(v.bssid, a.visits[i-1].bssid) {
-			n++
-		}
-	}
-	return n
 }

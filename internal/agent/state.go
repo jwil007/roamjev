@@ -309,9 +309,6 @@ func (a *Agent) buildState(link Link, cands []Candidate, now time.Time) map[stri
 		if c.UtilPct >= 0 {
 			m["channel_utilization_pct"] = c.UtilPct
 		}
-		if likelySameAP(c.BSSID, link.BSSID) {
-			m["same_ap_as_current"] = "likely: another radio of the AP the client is on"
-		}
 		if c.History != "" {
 			m["history"] = c.History
 		}
@@ -358,9 +355,6 @@ func (a *Agent) buildState(link Link, cands []Candidate, now time.Time) map[stri
 	}
 	if !a.cfg.HideHistory {
 		roam["roams_last_10_min"] = a.roamsWithin(now, historyWindow)
-		if n := a.sameAPSwitches(now); n > 0 {
-			roam["band_switches_within_one_ap_last_10_min"] = n
-		}
 		if p := a.pingPong(now); p != "" {
 			roam["pattern"] = p
 		}

@@ -102,23 +102,6 @@ func TestStayFall(t *testing.T) {
 	}
 }
 
-func TestLikelySameAP(t *testing.T) {
-	for _, c := range []struct {
-		a, b string
-		want bool
-	}{
-		{"02:5a:00:01:10:00", "02:5a:00:01:10:10", true},  // sim radios of AP 1
-		{"02:5a:00:01:10:00", "02:5a:00:02:10:00", false}, // different APs
-		{"aa:bb:cc:00:01:5c", "aa:bb:cc:00:01:5d", true},  // adjacent vendor BSSIDs
-		{"aa:bb:cc:00:01:5c", "dd:ee:ff:00:02:fc", false},
-		{"aa:bb:cc:00:01:5c", "aa:bb:cc:00:01:5c", false}, // same BSSID
-	} {
-		if got := likelySameAP(c.a, c.b); got != c.want {
-			t.Errorf("likelySameAP(%s, %s) = %v", c.a, c.b, got)
-		}
-	}
-}
-
 func TestSelectCandidatesBandBalance(t *testing.T) {
 	var in []Candidate
 	for i := range 6 { // six strong 2.4 GHz radios
