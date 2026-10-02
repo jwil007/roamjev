@@ -491,7 +491,12 @@ func questions(cands []Candidate, verify bool) map[string]jev.Question {
 						"ones not seen before (most expensive scan)",
 					"not_for": "refreshing APs that are already known",
 				},
-				"roam": map[string]string{"what": roamWhat},
+				"roam": map[string]string{
+					"what": roamWhat,
+					"not_for": "switching back to an AP the client left " +
+						"within the last minute or so, unless its situation " +
+						"has clearly changed since; that is ping-pong",
+				},
 			}},
 		"target": jev.Choice(
 			"If the client roamed now, which AP would give it the best "+
