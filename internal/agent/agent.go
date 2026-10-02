@@ -215,8 +215,9 @@ func (a *Agent) Run(ctx context.Context) error {
 				a.mem[o.To] = m
 			}
 			m.lastOutcome = &o
-			a.addRecent("roam %s -> %s graded %s: MOS %.2f -> %.2f",
-				apID(o.From), apID(o.To), o.VerdictBA, o.Pre.MOS, o.Post.MOS)
+			a.addRecent("after roam %s -> %s: gateway loss %.1f%% -> %.1f%%, "+
+				"latency %.0f -> %.0f ms", apID(o.From), apID(o.To),
+				o.Pre.LossPct, o.Post.LossPct, o.Pre.LatencyMs, o.Post.LatencyMs)
 		}
 	}
 }

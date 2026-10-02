@@ -21,7 +21,19 @@ import (
 	"github.com/jwil007/roamjev/internal/linkq"
 )
 
-const noiseFloor = -95
+// Noise floors by band. 2.4 GHz is crowded with Bluetooth, microwaves,
+// cordless devices and every nearby network on just three channels; 6 GHz is
+// new spectrum with no legacy clients. On top of its floor, each 2.4 GHz
+// radio suffers random interference bursts (see interference).
+func noiseFloor(band string) float64 {
+	switch band {
+	case "2.4GHz":
+		return -89
+	case "6GHz":
+		return -96
+	}
+	return -94
+}
 
 type ap struct {
 	idx     int // physical AP index in the scenario
@@ -36,7 +48,12 @@ type ap struct {
 	pl1m    float64
 	util    float64
 	shadow  float64
+	burst   float64   // extra noise (dB) from a 2.4 GHz interference burst
+	burstTo time.Time // burst end
 }
+
+// noise is the AP's current noise floor including any burst.
+func (a *ap) noise() float64 { return noiseFloor(a.band) + a.burst }
 
 type World struct {
 	SSID string
@@ -229,6 +246,18 @@ func (w *World) advance(now time.Time, dt float64) {
 		}
 		a.util += (target-a.util)*0.05 + (w.wr.Float64()-0.5)*2
 		a.util = math.Max(1, math.Min(99, a.util))
+		// 2.4 GHz: a burst roughly every minute, lasting 3-15 s, raising
+		// the noise floor 6-15 dB (a microwave, a Bluetooth speaker, a
+		// neighbor's camera).
+		if a.band == "2.4GHz" {
+			if a.burst > 0 && now.After(a.burstTo) {
+				a.burst = 0
+			}
+			if a.burst == 0 && w.wr.Float64() < dt/60 {
+				a.burst = 6 + w.wr.Float64()*9
+				a.burstTo = now.Add(time.Duration(3+w.wr.IntN(12)) * time.Second)
+			}
+		}
 	}
 	if w.down {
 		return
@@ -276,7 +305,7 @@ func (w *World) traffic(dt float64) {
 // effMbps is what the link can actually deliver: PHY rate times the
 // airtime left over by other clients, times a MAC efficiency factor.
 func (w *World) effMbps(a *ap) float64 {
-	snr := w.rssiOf(a) - noiseFloor
+	snr := w.rssiOf(a) - a.noise()
 	return float64(rateFor(mcsFor(snr), a.width)) / 1e6 *
 		(1 - a.util/100) * 0.6
 }
@@ -314,7 +343,7 @@ func (w *World) StayQuality(bssid string, from, to time.Time) (linkq.Window, boo
 
 func (w *World) probeAP(now time.Time, a *ap, scanning bool) (linkq.Sample, uint64, uint64) {
 	s := linkq.Sample{At: now}
-	snr := w.rssiOf(a) + w.nr.NormFloat64()*1.5 - noiseFloor
+	snr := w.rssiOf(a) + w.nr.NormFloat64()*1.5 - a.noise()
 	util := a.util
 	pLoss := 0.5/(1+math.Exp((snr-12)/2.2)) + math.Max(0, util-60)/40*0.08
 	if scanning {
@@ -372,7 +401,7 @@ func (w *World) Link(_ context.Context) (agent.Link, error) {
 		return agent.Link{SSID: w.SSID, WPAState: "DISCONNECTED"}, nil
 	}
 	rssi := w.rssiOf(w.cur) + w.nr.NormFloat64()
-	m := mcsFor(rssi - noiseFloor)
+	m := mcsFor(rssi - w.cur.noise())
 	return agent.Link{
 		SSID: w.SSID, BSSID: w.cur.bssid, Freq: w.cur.freq,
 		WPAState: "COMPLETED", RSSI: int(math.Round(rssi)),
@@ -427,9 +456,9 @@ func (w *World) Scan(ctx context.Context, freqs []int) error {
 		w.cache[a.bssid] = agent.BSS{
 			BSSID: a.bssid, SSID: w.SSID, Freq: a.freq, Channel: a.channel,
 			Band: a.band, RSSI: int(math.Round(rssi)),
-			SNR: int(math.Round(rssi)) - noiseFloor, Width: a.width,
+			SNR: int(math.Round(rssi - a.noise())), Width: a.width,
 			PHY: a.phy, UtilPct: int(a.util), Stations: 3 + int(a.util/4),
-			EstThroughputKbps: rateFor(mcsFor(rssi-noiseFloor), a.width) / 2000,
+			EstThroughputKbps: rateFor(mcsFor(rssi-a.noise()), a.width) / 1000,
 			Security:          w.sc.security, FT: w.sc.ft,
 		}
 		w.cacheAt[a.bssid] = now

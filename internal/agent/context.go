@@ -24,23 +24,31 @@ var briefing = map[string]any{
 	"goal": "Give this Wi-Fi client the best experience for what it is " +
 		"doing right now, at the lowest cost to the network.",
 	"what_matters_when": map[string]string{
-		"on a call or other real-time traffic": "steady, low-loss, " +
-			"low-jitter link (voice MOS); every interruption is audible",
-		"downloading or other heavy traffic": "throughput: a strong " +
-			"signal (high MCS) on an AP with free airtime",
+		"light steady traffic (calls, video conferencing)": "a steady " +
+			"link: low loss, low latency, low jitter; every interruption " +
+			"is audible",
+		"heavy traffic (downloads, uploads)": "throughput: high MCS on a " +
+			"wide channel with free airtime",
 		"idle": "little is at stake right now, so interruptions are " +
 			"cheap; a good time to improve the link before traffic resumes",
 	},
 	"wifi_facts": []string{
+		"Band matters even at the same signal, width and load: 6 GHz " +
+			"generally performs best (new, clean spectrum, wide channels, " +
+			"no legacy clients), then 5 GHz. 2.4 GHz is best-effort: only " +
+			"three non-overlapping channels shared by every nearby network, " +
+			"plus interference from Bluetooth, microwaves and other devices. " +
+			"2.4 GHz signal reads stronger at the same distance because it " +
+			"propagates further, but it carries less and less reliably.",
 		"Airtime is shared. A client on weak signal uses a low MCS and " +
 			"takes longer to send the same data, which slows every other " +
 			"client on that AP as well as itself.",
 		"Channel utilization is the share of airtime already busy. A " +
 			"strong signal on a very busy AP can deliver less than a " +
 			"somewhat weaker signal on a quiet one.",
-		"A voice call needs little throughput, so voice quality often " +
-			"stays good on weak signal until packets start getting lost; " +
-			"throughput suffers much earlier.",
+		"A voice call needs little throughput, so loss, latency and " +
+			"jitter often stay low on weak signal until packets start " +
+			"getting lost; throughput suffers much earlier.",
 		"Scanning takes the radio off its home channel for each channel " +
 			"scanned; nothing is sent or received meanwhile. Fewer " +
 			"channels cost less. DFS channels (5 GHz 52-144) are scanned " +
@@ -86,25 +94,21 @@ func (a *Agent) trafficKbps(now time.Time, d time.Duration) (float64, bool) {
 	return bits / secs / 1000, true
 }
 
-func trafficWords(kbps float64) string {
-	switch {
-	case kbps < 20:
-		return "idle"
-	case kbps < 500:
-		return fmt.Sprintf("light and steady, about %.0f kb/s (typical of "+
-			"a voice call or chat)", kbps)
-	case kbps < 5000:
-		return fmt.Sprintf("moderate, about %.1f Mb/s", kbps/1000)
-	default:
-		return fmt.Sprintf("heavy, about %.0f Mb/s (bulk transfer)", kbps/1000)
+func rateWords(kbps float64) string {
+	if kbps >= 1000 {
+		return fmt.Sprintf("%.1f Mb/s", kbps/1000)
 	}
+	return fmt.Sprintf("%.0f kb/s", kbps)
 }
 
 // clientState says what the client is doing and whether it seems to move.
 func (a *Agent) clientState(now time.Time) map[string]any {
 	m := map[string]any{}
 	if k, ok := a.trafficKbps(now, 10*time.Second); ok {
-		m["traffic_last_10s"] = trafficWords(k)
+		m["traffic_last_10s"] = map[string]any{
+			"rate":  rateWords(k),
+			"class": trafficClass(k),
+		}
 	} else {
 		m["traffic_last_10s"] = "not measured yet"
 	}
@@ -172,9 +176,8 @@ func (a *Agent) environment(link Link) map[string]any {
 		if len(utils) > 0 {
 			slices.Sort(utils)
 			m["channel_utilization"] = fmt.Sprintf("median %d%%, busiest "+
-				"%d%%; %d of %d APs above 60%% busy (%s)",
-				utils[len(utils)/2], utils[len(utils)-1], busy, len(utils),
-				loadWords(utils[len(utils)/2]))
+				"%d%%; %d of %d APs above 60%% busy",
+				utils[len(utils)/2], utils[len(utils)-1], busy, len(utils))
 		}
 		if cochan > 0 {
 			m["co_channel_aps"] = fmt.Sprintf("%d other AP(s) of this "+
@@ -183,17 +186,6 @@ func (a *Agent) environment(link Link) map[string]any {
 	}
 	m["security"] = a.securityWords(link)
 	return m
-}
-
-func loadWords(median int) string {
-	switch {
-	case median >= 60:
-		return "a busy, high-density environment"
-	case median >= 35:
-		return "moderately busy"
-	default:
-		return "lightly loaded"
-	}
 }
 
 func (a *Agent) securityWords(link Link) string {
@@ -351,4 +343,81 @@ func effMbps(rxBitrate, utilPct int) float64 {
 		r *= 1 - float64(utilPct)/100
 	}
 	return math.Round(r)
+}
+
+// The same RSSI -> MCS -> PHY rate estimate is used for the current AP and
+// every candidate, so "N x the current rate" compares like with like. Noise
+// floors are typical values by band (2.4 GHz is noisier); the MCS steps are
+// approximate 802.11ax SNR requirements; rates assume two spatial streams.
+func assumedNoise(band string) int {
+	switch band {
+	case "2.4GHz":
+		return -89
+	case "6GHz":
+		return -96
+	}
+	return -94
+}
+
+func maxMCS(phy string) int {
+	switch phy {
+	case "802.11n":
+		return 7
+	case "802.11ac":
+		return 9
+	case "Legacy a/b/g":
+		return 0
+	}
+	return 11
+}
+
+func estMCS(rssi int, band, phy string) int {
+	snr := rssi - assumedNoise(band)
+	steps := []int{5, 8, 11, 14, 17, 20, 23, 26, 29, 32, 35, 38}
+	m := -1
+	for _, s := range steps {
+		if snr >= s {
+			m++
+		}
+	}
+	return max(0, min(m, maxMCS(phy)))
+}
+
+func estPHYMbps(rssi int, band, width, phy string) int {
+	base := []float64{8.6, 17.2, 25.8, 34.4, 51.6, 68.8, 77.4, 86, 103.2,
+		114.7, 129, 143.4} // 20 MHz, 1 stream, 802.11ax
+	f := map[string]float64{"20MHz": 1, "40MHz": 2, "80MHz": 4.2,
+		"160MHz": 8.4, "320MHz": 16.8}[width]
+	if f == 0 {
+		f = 1
+	}
+	return int(base[estMCS(rssi, band, phy)] * f * 2)
+}
+
+// ratio states a/b in words, which Jev reads more reliably than two numbers.
+func ratio(a, b float64) string {
+	if b <= 0 {
+		return "unknown"
+	}
+	r := a / b
+	switch {
+	case r >= 0.9 && r <= 1.1:
+		return "about the same as the current link"
+	case r > 1:
+		return fmt.Sprintf("about %.1fx the current link", r)
+	default:
+		return fmt.Sprintf("about %.0f%% of the current link", r*100)
+	}
+}
+
+// trafficClass matches the briefing's what_matters_when keys exactly.
+func trafficClass(kbps float64) string {
+	switch {
+	case kbps < 20:
+		return "idle"
+	case kbps < 2000:
+		return "light steady traffic (calls, video conferencing)"
+	default:
+		return "heavy traffic (downloads, uploads)"
+	}
 }

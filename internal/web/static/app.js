@@ -364,6 +364,11 @@ function detailsBlock(d) {
 }
 
 // ---- candidates ----------------------------------------------------------
+function gwWords(conn) {
+  const g = conn?.link_to_gateway_last_10s;
+  if (g && g.loss_pct != null) return `gw loss ${g.loss_pct}%, ${g.latency_ms} ms, jitter ${g.jitter_ms} ms`;
+  return conn?.link_quality_last_10s?.rating; // older journals
+}
 function renderCandidates() {
   const d = selectedId != null ? S.decisions.find((x) => x.id === selectedId) : S.decisions[S.decisions.length - 1];
   const tbl = $("cands");
@@ -373,17 +378,17 @@ function renderCandidates() {
   const rows = [];
   rows.push(`<tr class="current"><td class="mono">${esc(cur.id)} <span class="muted">(current)</span></td><td>${esc(cur.band || "")} ${cur.channel ?? ""}</td><td>${esc(cur.width || "")}</td>
     <td class="num">${sig.rssi_dbm ?? "–"}</td><td class="num">–</td><td class="num">${cur.channel_utilization_pct ?? "–"}</td><td class="num">–</td><td class="num">–</td>
-    <td class="hist">${esc([sig.trend_10s, st.connection?.link_quality_last_10s?.rating, cur.history].filter(Boolean).join(" · "))}</td><td></td></tr>`);
+    <td class="hist">${esc([sig.trend_10s, gwWords(st.connection), cur.history].filter(Boolean).join(" · "))}</td><td></td></tr>`);
   for (const c of st.candidate_aps || []) {
     const p = probs[c.id] ?? 0;
     const pick = d.answers?.target?.choice === c.id;
     rows.push(`<tr class="${pick ? "pick" : ""}"><td class="mono">${esc(c.id)}</td><td>${esc(c.band)} ${c.channel}</td><td>${esc(c.width)}</td>
       <td class="num">${c.rssi_dbm}</td><td class="num">${c.rssi_vs_current_db > 0 ? "+" : ""}${c.rssi_vs_current_db}</td>
-      <td class="num">${c.channel_utilization_pct ?? "–"}</td><td class="num">${c.est_throughput_mbps}</td><td class="num">${c.measured_seconds_ago}s</td>
+      <td class="num">${c.channel_utilization_pct ?? "–"}</td><td class="num">${c.est_mbps_after_airtime_sharing ?? c.est_throughput_mbps ?? "–"}</td><td class="num">${c.measured_seconds_ago}s</td>
       <td class="hist">${esc(c.history || "")}</td>
       <td><span class="minibar"><i style="width:${(p * 100).toFixed(0)}%"></i></span><span class="mono">${pct(p)}</span></td></tr>`);
   }
-  tbl.innerHTML = `<thead><tr><th>AP</th><th>band ch</th><th>width</th><th>RSSI</th><th>Δ dB</th><th>util %</th><th>est Mb/s</th><th>age</th><th>history</th><th>P(target)</th></tr></thead><tbody>${rows.join("")}</tbody>`;
+  tbl.innerHTML = `<thead><tr><th>AP</th><th>band ch</th><th>width</th><th>RSSI</th><th>Δ dB</th><th>util %</th><th title="estimated rate after airtime sharing">est Mb/s</th><th>age</th><th>history</th><th>P(target)</th></tr></thead><tbody>${rows.join("")}</tbody>`;
   if (!(st.candidate_aps || []).length) tbl.innerHTML += `<tbody><tr><td colspan="10" class="muted">No scan data in this decision${st.scan?.status ? " – " + esc(st.scan.status) : ""}.</td></tr></tbody>`;
 }
 

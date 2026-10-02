@@ -104,8 +104,10 @@ func (a *Agent) memoryLine(bssid string, now time.Time) string {
 	if m.lastOutcome != nil {
 		o := m.lastOutcome
 		parts = append(parts, fmt.Sprintf(
-			"last roam here %s: MOS %.2f -> %.2f (%s)",
-			ago(now.Sub(o.T)), o.Pre.MOS, o.Post.MOS, o.VerdictBA))
+			"last roam here %s: gateway loss %.1f%% -> %.1f%%, latency "+
+				"%.0f -> %.0f ms, jitter %.1f -> %.1f ms",
+			ago(now.Sub(o.T)), o.Pre.LossPct, o.Post.LossPct,
+			o.Pre.LatencyMs, o.Post.LatencyMs, o.Pre.JitterMs, o.Post.JitterMs))
 	}
 	if m.failures > 0 {
 		parts = append(parts, fmt.Sprintf(
@@ -162,25 +164,27 @@ func (a *Agent) buildCandidates(link Link, now time.Time) []Candidate {
 }
 
 type stateLink struct {
-	AP           map[string]any `json:"ap"`
-	Signal       map[string]any `json:"signal"`
-	Rates        map[string]any `json:"rates"`
-	Quality10s   map[string]any `json:"link_quality_last_10s"`
-	Quality60s   map[string]any `json:"link_quality_last_60s"`
-	AppRetrans   map[string]any `json:"app_tcp_retransmits_last_10s"`
-	SecondsOnAP  int            `json:"seconds_on_this_ap"`
+	AP          map[string]any `json:"ap"`
+	Signal      map[string]any `json:"signal"`
+	Radio       map[string]any `json:"radio"`
+	Gateway10s  map[string]any `json:"link_to_gateway_last_10s"`
+	Gateway60s  map[string]any `json:"link_to_gateway_last_60s"`
+	AppRetrans  map[string]any `json:"app_tcp_retransmits_last_10s"`
+	SecondsOnAP int            `json:"seconds_on_this_ap"`
 }
 
-func qualityMap(w linkq.Window) map[string]any {
+// gatewayMap states the measured L2 link to the gateway as plain values:
+// no MOS, no ratings. The sensitivity tests showed a single rated "health"
+// number anchors Jev's judgment of whether anything is wrong.
+func gatewayMap(w linkq.Window) map[string]any {
 	if !w.Valid {
 		return map[string]any{"status": "no measurements"}
 	}
 	return map[string]any{
-		"mos":        math.Round(w.MOS*100) / 100,
-		"rating":     mosRating(w.MOS),
 		"loss_pct":   math.Round(w.LossPct*10) / 10,
 		"latency_ms": math.Round(w.LatencyMs*10) / 10,
 		"jitter_ms":  math.Round(w.JitterMs*10) / 10,
+		"probes":     w.Sent,
 	}
 }
 
@@ -232,10 +236,13 @@ func (a *Agent) buildState(link Link, cands []Candidate, now time.Time) map[stri
 		sig["trend_30s"] = trendWords(float64(link.RSSI-r), "dB", "30s", 3)
 	}
 
-	q10 := qualityMap(w10)
+	q10 := gatewayMap(w10)
 	if w10.Valid && prev10.Valid {
-		q10["mos_vs_previous_10s"] = trendWords(
-			w10.MOS-prev10.MOS, "MOS", "the previous 10s", 0.1)
+		q10["previous_10s"] = map[string]any{
+			"loss_pct":   math.Round(prev10.LossPct*10) / 10,
+			"latency_ms": math.Round(prev10.LatencyMs*10) / 10,
+			"jitter_ms":  math.Round(prev10.JitterMs*10) / 10,
+		}
 	}
 
 	retr := map[string]any{"segments_sent": w10.TCPOutSegs}
@@ -255,17 +262,23 @@ func (a *Agent) buildState(link Link, cands []Candidate, now time.Time) map[stri
 		if c.Current {
 			continue
 		}
+		est := estPHYMbps(c.RSSI, c.Band, c.Width, c.PHY)
+		after := float64(est)
+		if c.UtilPct >= 0 {
+			after *= 1 - float64(c.UtilPct)/100
+		}
 		m := map[string]any{
 			"id": c.ID, "band": c.Band, "channel": c.Channel,
 			"width": c.Width, "phy": c.PHY, "rssi_dbm": c.RSSI,
 			"rssi_vs_current_db": c.RSSIDelta,
-			"est_throughput_mbps": c.EstMbps,
-			"measured_seconds_ago": c.SeenAgoS,
+			"est_mcs": estMCS(c.RSSI, c.Band, c.PHY),
+			"est_phy_mbps":           est,
+			"est_mbps_after_airtime_sharing": int(after),
+			"est_rate_vs_current":    ratio(after, a.curEstAfter(link, cur)),
+			"measured_seconds_ago":   c.SeenAgoS,
 		}
 		if c.UtilPct >= 0 {
 			m["channel_utilization_pct"] = c.UtilPct
-			m["est_mbps_after_airtime_sharing"] = int(float64(c.EstMbps) *
-				(1 - float64(c.UtilPct)/100))
 		}
 		if c.History != "" {
 			m["history"] = c.History
@@ -326,15 +339,9 @@ func (a *Agent) buildState(link Link, cands []Candidate, now time.Time) map[stri
 		"connection": stateLink{
 			AP:     cur,
 			Signal: sig,
-			Rates: map[string]any{
-				"tx_mcs": link.TxMCS, "rx_mcs": link.RxMCS,
-				"tx_mbps": link.TxBitrate / 1_000_000,
-				"rx_mbps": link.RxBitrate / 1_000_000,
-				"rx_mbps_after_airtime_sharing": effMbps(link.RxBitrate,
-					curUtil(cur)),
-			},
-			Quality10s:  q10,
-			Quality60s:  qualityMap(w60),
+			Radio:      a.radioMap(link, cur),
+			Gateway10s: q10,
+			Gateway60s: gatewayMap(w60),
 			AppRetrans:  retr,
 			SecondsOnAP: secOnAP,
 		},
@@ -439,4 +446,50 @@ func curUtil(cur map[string]any) int {
 		return u
 	}
 	return 0
+}
+
+// curEstAfter is the current AP's estimated rate after airtime sharing,
+// from the same estimator the candidates use.
+func (a *Agent) curEstAfter(link Link, cur map[string]any) float64 {
+	band, _ := cur["band"].(string)
+	phy, _ := cur["phy"].(string)
+	if band == "" {
+		band, _ = bandChannel(link.Freq)
+	}
+	est := float64(estPHYMbps(link.RSSI, band, link.Width, phy))
+	if u := curUtil(cur); u > 0 {
+		est *= 1 - float64(u)/100
+	}
+	return est
+}
+
+// radioMap is how the radio link is actually performing (reported by the
+// driver) next to the same RSSI-based estimate used for candidates.
+func (a *Agent) radioMap(link Link, cur map[string]any) map[string]any {
+	band, _ := cur["band"].(string)
+	phy, _ := cur["phy"].(string)
+	if band == "" {
+		band, _ = bandChannel(link.Freq)
+	}
+	m := map[string]any{
+		"band": band, "width": link.Width,
+		"rx_mcs":         fmt.Sprintf("%d (max %d for %s)", link.RxMCS, maxMCS(phy), orUnknown(phy)),
+		"tx_mcs":         link.TxMCS,
+		"rx_phy_mbps":    link.RxBitrate / 1_000_000,
+		"tx_phy_mbps":    link.TxBitrate / 1_000_000,
+		"est_phy_mbps":   estPHYMbps(link.RSSI, band, link.Width, phy),
+		"est_mbps_after_airtime_sharing": int(a.curEstAfter(link, cur)),
+	}
+	if u := curUtil(cur); u > 0 {
+		m["channel_utilization_pct"] = u
+		m["rx_mbps_after_airtime_sharing"] = effMbps(link.RxBitrate, u)
+	}
+	return m
+}
+
+func orUnknown(s string) string {
+	if s == "" {
+		return "unknown PHY"
+	}
+	return s
 }
