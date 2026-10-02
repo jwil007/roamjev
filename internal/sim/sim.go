@@ -42,6 +42,13 @@ type World struct {
 	Scenario string
 	// shadowStep scales the slow shadowing random walk.
 	shadowStep float64
+	// Seed drives two independent streams: wr for the world itself (walk,
+	// pauses, shadowing, congestion) and nr for measurement noise and roam
+	// luck. Two runs with the same seed see the identical world, whatever
+	// their deciders do.
+	Seed uint64
+	wr   *rand.Rand
+	nr   *rand.Rand
 
 	mu       sync.Mutex
 	aps      []*ap
@@ -63,16 +70,21 @@ type World struct {
 	cf map[string]*linkq.Ring
 }
 
-func NewWorld(ring *linkq.Ring, speed float64, scenario string) (*World, error) {
+func NewWorld(ring *linkq.Ring, speed float64, scenario string, seed uint64) (*World, error) {
+	if seed == 0 {
+		seed = uint64(time.Now().UnixNano())
+	}
 	w := &World{SSID: "lab-sim", Speed: speed, ring: ring, dir: 1,
 		cache: map[string]agent.BSS{}, cacheAt: map[string]time.Time{},
-		start: time.Now(), x: 2, Scenario: scenario, shadowStep: 0.6}
+		start: time.Now(), x: 2, Scenario: scenario, shadowStep: 0.6,
+		Seed: seed, wr: rand.New(rand.NewPCG(seed, 1)),
+		nr: rand.New(rand.NewPCG(seed, 2))}
 	add := func(i int, x float64, freq, ch int, band, width, phy string,
 		tx, pl float64) {
 		w.aps = append(w.aps, &ap{
 			bssid: fmt.Sprintf("02:5a:%02x:00:%02x:%02x", i, freq%256, ch),
 			x:     x, y: 4, freq: freq, channel: ch, band: band, width: width,
-			phy: phy, txPower: tx, pl1m: pl, util: 15 + rand.Float64()*20,
+			phy: phy, txPower: tx, pl1m: pl, util: 15 + w.wr.Float64()*20,
 			ft: true,
 		})
 	}
@@ -143,18 +155,18 @@ func (w *World) advance(now time.Time, dt float64) {
 		if w.x > 82 || w.x < -4 {
 			w.dir = -w.dir
 		}
-		if rand.Float64() < dt/40 {
-			w.pauseTil = now.Add(time.Duration(15+rand.IntN(30)) * time.Second)
+		if w.wr.Float64() < dt/40 {
+			w.pauseTil = now.Add(time.Duration(15+w.wr.IntN(30)) * time.Second)
 		}
 	}
 	for i, a := range w.aps {
-		a.shadow += (rand.Float64()-0.5)*w.shadowStep - a.shadow*0.02
+		a.shadow += (w.wr.Float64()-0.5)*w.shadowStep - a.shadow*0.02
 		// AP 3's radios get congested for a minute out of every three.
 		target := 20.0
 		if i/2 == 2 && int(now.Sub(w.start).Minutes())%3 == 1 {
 			target = 88
 		}
-		a.util += (target-a.util)*0.05 + (rand.Float64()-0.5)*2
+		a.util += (target-a.util)*0.05 + (w.wr.Float64()-0.5)*2
 		a.util = math.Max(1, math.Min(99, a.util))
 	}
 	if w.down {
@@ -218,18 +230,18 @@ func (w *World) StayQuality(bssid string, from, to time.Time) (linkq.Window, boo
 
 func (w *World) probeAP(now time.Time, a *ap, scanning bool) (linkq.Sample, uint64, uint64) {
 	s := linkq.Sample{At: now}
-	snr := w.rssiOf(a) + rand.NormFloat64()*1.5 - noiseFloor
+	snr := w.rssiOf(a) + w.nr.NormFloat64()*1.5 - noiseFloor
 	util := a.util
 	pLoss := 0.5/(1+math.Exp((snr-12)/2.2)) + math.Max(0, util-60)/40*0.08
 	if scanning {
 		pLoss += 0.45
 	}
 	lat := 1.5 + math.Max(0, 25-snr)*0.8 + math.Max(0, util-40)*0.25
-	lat += math.Abs(rand.NormFloat64()) * (1 + math.Max(0, util-50)*0.12 +
+	lat += math.Abs(w.nr.NormFloat64()) * (1 + math.Max(0, util-50)*0.12 +
 		math.Max(0, 22-snr)*0.4)
-	out := uint64(40 + rand.IntN(20))
+	out := uint64(40 + w.nr.IntN(20))
 	retx := uint64(float64(out) * math.Min(0.5, pLoss*1.5))
-	if rand.Float64() < pLoss {
+	if w.nr.Float64() < pLoss {
 		s.Lost = true
 		return s, out, retx
 	}
@@ -262,7 +274,7 @@ func (w *World) Link(_ context.Context) (agent.Link, error) {
 	if w.down {
 		return agent.Link{SSID: w.SSID, WPAState: "DISCONNECTED"}, nil
 	}
-	rssi := w.rssiOf(w.cur) + rand.NormFloat64()
+	rssi := w.rssiOf(w.cur) + w.nr.NormFloat64()
 	m := mcsFor(rssi - noiseFloor)
 	return agent.Link{
 		SSID: w.SSID, BSSID: w.cur.bssid, Freq: w.cur.freq,
@@ -304,7 +316,7 @@ func (w *World) Scan(ctx context.Context, freqs []int) error {
 		if freqs != nil && !want[a.freq] {
 			continue
 		}
-		rssi := w.rssiOf(a) + rand.NormFloat64()*2
+		rssi := w.rssiOf(a) + w.nr.NormFloat64()*2
 		if rssi < -88 {
 			delete(w.cache, a.bssid)
 			continue
@@ -347,12 +359,12 @@ func (w *World) Roam(ctx context.Context, bssid string) (agent.RoamResult, error
 	}
 	w.busy = "roam"
 	rssi := w.rssiOf(target)
-	w.mu.Unlock()
 	d := 60 * time.Millisecond
 	if !target.ft {
 		d = 350 * time.Millisecond
 	}
-	d += time.Duration(rand.IntN(40)) * time.Millisecond
+	d += time.Duration(w.nr.IntN(40)) * time.Millisecond
+	w.mu.Unlock()
 	select {
 	case <-ctx.Done():
 		return agent.RoamResult{}, ctx.Err()
@@ -361,7 +373,7 @@ func (w *World) Roam(ctx context.Context, bssid string) (agent.RoamResult, error
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.busy = ""
-	if rssi < -82 || rand.Float64() < 0.03 {
+	if rssi < -82 || w.nr.Float64() < 0.03 {
 		return agent.RoamResult{Duration: d,
 			Message: "Assoc rejected - Association denied, poor channel " +
 				"conditions"}, nil

@@ -202,7 +202,11 @@ func (s Summary) Print(w io.Writer, name string) {
 	}
 	p("outcomes", "%d better, %d no change, %d worse (%s; before/after avg %+.2f)", s.Better, s.NoChange, s.Worse, basis, s.AvgMOSDelta)
 	p("scans", "%d targeted, %d full (%s scanning)", s.ScansTargeted, s.ScansFull, s.ScanTime.Round(100*time.Millisecond))
-	p("Jev calls", "%d  (%d errors, %d blocked by rails, median %.0f ms, $%.4f)", s.Calls, s.Errors, s.Blocked, s.MedianLatency, s.CostUSD)
+	if s.CostUSD > 0 {
+		p("Jev calls", "%d  (%d errors, %d blocked by rails, median %.0f ms, $%.4f)", s.Calls, s.Errors, s.Blocked, s.MedianLatency, s.CostUSD)
+	} else {
+		p("decisions", "%d  (%d blocked by rails)", s.Calls, s.Blocked)
+	}
 	p("short-lived? (noul)", "%.2f when choosing roam, %.2f otherwise", s.ShortLivedWhenRoam, s.ShortLivedWhenNot)
 }
 

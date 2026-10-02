@@ -10,7 +10,7 @@ import (
 // The counterfactual stream for each AP should track that AP's own signal:
 // near the client it's clean, near the sensitivity floor it's lossy.
 func TestCounterfactual(t *testing.T) {
-	w, err := NewWorld(linkq.NewRing(time.Minute), 0, "walk")
+	w, err := NewWorld(linkq.NewRing(time.Minute), 0, "walk", 42)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,5 +31,28 @@ func TestCounterfactual(t *testing.T) {
 	}
 	if _, ok := w.StayQuality("no:such", start, end); ok {
 		t.Fatal("unknown BSSID reported valid")
+	}
+}
+
+// Two worlds with the same seed evolve identically even when one of them
+// draws extra measurement noise, because the world has its own stream.
+func TestSeedDeterminism(t *testing.T) {
+	a, _ := NewWorld(linkq.NewRing(time.Minute), 1.2, "walk", 7)
+	b, _ := NewWorld(linkq.NewRing(time.Minute), 1.2, "walk", 7)
+	now := time.Now()
+	for i := range 400 {
+		at := now.Add(time.Duration(i) * 250 * time.Millisecond)
+		a.advance(at, 0.25)
+		b.advance(at, 0.25)
+		b.probe(at) // extra noise draws in b only
+		b.probe(at)
+	}
+	if a.x != b.x {
+		t.Fatalf("positions differ: %v vs %v", a.x, b.x)
+	}
+	for i := range a.aps {
+		if a.aps[i].shadow != b.aps[i].shadow || a.aps[i].util != b.aps[i].util {
+			t.Fatalf("AP %d differs", i)
+		}
 	}
 }

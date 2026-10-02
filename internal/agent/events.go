@@ -37,6 +37,8 @@ type Decision struct {
 	ID        int                     `json:"id"`
 	T         time.Time               `json:"t"`
 	Trigger   string                  `json:"trigger"`
+	Policy    string                  `json:"policy,omitempty"`
+	Reason    string                  `json:"reason,omitempty"`
 	State     json.RawMessage         `json:"state"`
 	Questions map[string]jev.Question `json:"questions"`
 	Answers   map[string]jev.Answer   `json:"answers,omitempty"`
@@ -119,6 +121,8 @@ type Info struct {
 	BudgetUSD float64   `json:"budget_usd"`
 	Journal   string    `json:"journal"`
 	Version   string    `json:"version"`
+	Policy    string    `json:"policy,omitempty"`
+	SimSeed   uint64    `json:"sim_seed,omitempty"`
 	Replay    bool      `json:"replay,omitempty"`
 }
 

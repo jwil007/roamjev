@@ -51,11 +51,11 @@ func DefaultConfig() Config {
 }
 
 type Agent struct {
-	cfg   Config
-	radio Radio
-	q     *linkq.Ring
-	jev   *jev.Client
-	store *Store
+	cfg    Config
+	radio  Radio
+	q      *linkq.Ring
+	policy Policy
+	store  *Store
 	// Gateway reports the probed gateway for the UI, if known.
 	Gateway func() string
 
@@ -95,9 +95,9 @@ type rssiPoint struct {
 	rssi int
 }
 
-func New(cfg Config, radio Radio, q *linkq.Ring, j *jev.Client,
+func New(cfg Config, radio Radio, q *linkq.Ring, policy Policy,
 	store *Store) *Agent {
-	return &Agent{cfg: cfg, radio: radio, q: q, jev: j, store: store,
+	return &Agent{cfg: cfg, radio: radio, q: q, policy: policy, store: store,
 		mem: map[string]*bssMemory{}, outcomeCh: make(chan Outcome, 16)}
 }
 
@@ -288,6 +288,8 @@ func (a *Agent) decide(ctx context.Context, trigger string,
 		a.prevBSSID = link.BSSID
 		a.selfRoam = false
 		a.recordJoin(link.BSSID, a.connChange)
+		a.policy.Notify(PolicyEvent{Kind: "conn_change", At: a.connChange,
+			Target: link.BSSID})
 	}
 	a.observeRSSI(link.BSSID, link.RSSI)
 
@@ -303,43 +305,49 @@ func (a *Agent) decide(ctx context.Context, trigger string,
 	}
 	cands := a.buildCandidates(link, now)
 	state := a.buildState(link, cands, now)
-	qs := questions(cands)
 	stateJSON, _ := json.Marshal(state)
 
 	a.decisionID++
 	d := Decision{ID: a.decisionID, T: now, Trigger: trigger,
-		State: stateJSON, Questions: qs}
+		State: stateJSON, Policy: a.policy.Name()}
 
-	a.setBusy("asking Jev")
-	cctx, cancel := context.WithTimeout(ctx, a.cfg.JevTimeout)
-	res, err := a.jev.Evaluate(cctx, state, qs)
-	cancel()
+	if _, isJev := a.policy.(*JevPolicy); isJev {
+		a.setBusy("asking Jev")
+	}
+	out, err := a.policy.Decide(ctx, PolicyInput{Now: now, Link: link,
+		Cands: cands, Scan: a.scan, ScanAt: a.scanAt, State: state,
+		LastRoam: a.lastRoam, ConnChange: a.connChange})
 	a.setBusy("")
 	if ctx.Err() != nil {
-		return // shutting down; not a Jev failure
+		return // shutting down; not a decider failure
 	}
+	d.Questions = out.Questions
+	d.Reason = out.Reason
 
-	a.mu.Lock()
-	a.calls++
-	if err != nil {
-		a.errs++
-	} else {
-		a.spent += res.CostUSD
-		a.latSum += float64(res.Latency.Microseconds()) / 1000
-	}
-	overBudget := a.cfg.BudgetUSD > 0 && a.spent >= a.cfg.BudgetUSD
-	if overBudget && !a.paused {
-		a.paused = true
-	}
-	a.mu.Unlock()
-	if overBudget {
-		a.store.AddNote("budget", fmt.Sprintf(
-			"run budget $%.2f reached; Jev calls paused", a.cfg.BudgetUSD))
+	if out.UsedJev {
+		a.mu.Lock()
+		a.calls++
+		if err != nil {
+			a.errs++
+		} else {
+			a.spent += out.CostUSD
+			a.latSum += float64(out.Latency.Microseconds()) / 1000
+		}
+		overBudget := a.cfg.BudgetUSD > 0 && a.spent >= a.cfg.BudgetUSD
+		newlyPaused := overBudget && !a.paused
+		if newlyPaused {
+			a.paused = true
+		}
+		a.mu.Unlock()
+		if newlyPaused {
+			a.store.AddNote("budget", fmt.Sprintf(
+				"run budget $%.2f reached; Jev calls paused", a.cfg.BudgetUSD))
+		}
 	}
 
 	if err != nil {
 		d.Err = err.Error()
-		d.Executed = "nothing (Jev unavailable)"
+		d.Executed = "nothing (decider unavailable)"
 		var apiErr *jev.APIError
 		if errors.As(err, &apiErr) && apiErr.Status == 401 {
 			d.Executed = "nothing (API key rejected)"
@@ -347,25 +355,20 @@ func (a *Agent) decide(ctx context.Context, trigger string,
 		if errors.Is(err, context.DeadlineExceeded) {
 			d.Err = fmt.Sprintf("timed out after %v", a.cfg.JevTimeout)
 		}
-		slog.Warn("Jev call failed", "err", d.Err)
+		slog.Warn("Decision failed", "err", d.Err)
 		a.store.AddDecision(d)
 		return
 	}
-	d.Answers = res.Answers
-	d.Model = res.Model
-	d.LatencyMs = float64(res.Latency.Microseconds()) / 1000
-	d.Tokens = res.Usage.InputTokens
-	d.CostUSD = res.CostUSD
-
-	act := res.Answers["action"]
-	tgt := res.Answers["target"]
-	d.Chosen, d.Confidence = act.Choice, act.Confidence
-	ids := candidateIDs(cands)
-	if b, ok := ids[tgt.Choice]; ok {
-		d.Target = b
-	}
-	for i := range cands {
-		cands[i].Prob = tgt.Probabilities[cands[i].ID]
+	d.Answers = out.Answers
+	d.Model = out.Model
+	d.LatencyMs = float64(out.Latency.Microseconds()) / 1000
+	d.Tokens = out.Tokens
+	d.CostUSD = out.CostUSD
+	d.Chosen, d.Confidence, d.Target = out.Chosen, out.Confidence, out.Target
+	if tgt, ok := out.Answers["target"]; ok {
+		for i := range cands {
+			cands[i].Prob = tgt.Probabilities[cands[i].ID]
+		}
 	}
 	a.store.SetCandidates(cands)
 
@@ -373,7 +376,7 @@ func (a *Agent) decide(ctx context.Context, trigger string,
 	slog.Info("Decision", "id", d.ID, "trigger", trigger,
 		"chosen", d.Chosen, "conf", d.Confidence, "target", d.Target,
 		"executed", d.Executed, "blocked", d.Blocked,
-		"latency_ms", int(d.LatencyMs))
+		"latency_ms", int(d.LatencyMs), "reason", d.Reason)
 	a.store.AddDecision(d)
 
 	switch d.Executed {
@@ -460,6 +463,8 @@ func (a *Agent) doScan(ctx context.Context, d Decision, link Link) {
 	}
 	a.setBusy("")
 	a.store.AddAction(act)
+	a.policy.Notify(PolicyEvent{Kind: "scan", At: time.Now(),
+		Success: act.Success, Message: kind})
 	if act.Success {
 		a.addRecent("%s scan found %d APs for this SSID", kind, act.Found)
 	} else {
@@ -486,6 +491,8 @@ func (a *Agent) doRoam(ctx context.Context, d Decision, link Link) {
 		act.Message = err.Error()
 	}
 	a.store.AddAction(act)
+	a.policy.Notify(PolicyEvent{Kind: "roam", At: done, Target: d.Target,
+		Success: act.Success, Message: act.Message})
 	m := a.mem[d.Target]
 	if m == nil {
 		m = &bssMemory{}

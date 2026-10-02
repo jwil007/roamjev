@@ -90,3 +90,13 @@ func parseConfig(configPath string) (*Config, error) {
 	}
 	return &cfg, nil
 }
+
+// Default returns roamctl's built-in default configuration (the "base"
+// template), for callers that don't use a config file.
+func Default() (*Config, error) {
+	var cfg Config
+	if _, err := toml.Decode(defaultConfigTemplate, &cfg); err != nil {
+		return nil, fmt.Errorf("toml.Decode: %w", err)
+	}
+	return &cfg, cfg.Validate()
+}

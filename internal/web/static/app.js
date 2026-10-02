@@ -309,6 +309,17 @@ function renderInspector() {
       <div>Executed: <b>${esc(d.executed)}</b></div>` + detailsBlock(d);
     return;
   }
+  if (!d.answers) {
+    // A rule-based policy: show the rule that fired instead of probabilities.
+    body.innerHTML = meta + `
+      <div class="verdict">${esc(d.policy || "policy")} chose <span class="pill ${esc(d.chosen)}">${esc(d.chosen)}</span>
+        ${d.target ? `→ <b class="mono">${apId(d.target)}</b>` : ""}
+        ${d.executed !== d.chosen ? `· executed <span class="pill ${esc(d.executed)}">${esc(d.executed)}</span>` : ""}</div>
+      ${d.blocked ? `<div class="blocked">Rail: ${esc(d.blocked)}</div>` : ""}
+      <div><div class="sub">Rule</div><div>${esc(d.reason || "–")}</div></div>
+      <details><summary>State (what Jev would have been shown)</summary><pre>${esc(JSON.stringify(d.state, null, 2))}</pre></details>`;
+    return;
+  }
   const A = d.answers || {};
   const tgtNames = {};
   try { for (const c of d.state?.candidate_aps || []) tgtNames[c.id] = `${c.id} · ${c.band} ch${c.channel}`; } catch (e) {}
@@ -475,6 +486,7 @@ function renderLog() {
       let res = "";
       if (d.err) res = `<span class="v-worse">${esc(d.err)}</span>`;
       else if (d.blocked) res = `<span class="blocked">${esc(d.blocked)}</span>`;
+      else if (!a && d.reason) res = `<span class="muted">${esc(d.reason)}</span>`;
       else if (a) res = a.kind === "roam" ? (a.success ? `<span class="v-better">ok ${Math.round(a.duration_ms)} ms</span>` : `<span class="v-worse">${esc(a.message)}</span>`) : `${a.found ?? 0} APs, ${(a.duration_ms / 1000).toFixed(1)} s`;
       return `<tr data-id="${d.id}" class="${d.id === selectedId ? "sel" : ""}"><td>${fmtT(d.t)}</td><td class="mono">${d.id}</td><td>${esc(d.trigger)}</td>
         <td>${d.chosen ? `<span class="pill ${esc(d.chosen)}">${esc(d.chosen)}</span>` : "–"}</td><td class="num">${f2(d.confidence)}</td>

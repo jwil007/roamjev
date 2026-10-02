@@ -20,6 +20,7 @@ import (
 
 	charmlog "charm.land/log/v2"
 	"github.com/jwil007/roamjev/internal/agent"
+	"github.com/jwil007/roamjev/internal/config"
 	"github.com/jwil007/roamjev/internal/jev"
 	"github.com/jwil007/roamjev/internal/linkq"
 	"github.com/jwil007/roamjev/internal/sim"
@@ -42,6 +43,8 @@ func run() error {
 	simMode := flag.Bool("sim", false, "simulate a hallway of APs instead of using the radio")
 	simSpeed := flag.Float64("sim-speed", 1.2, "simulated walking speed, m/s")
 	simScenario := flag.String("sim-scenario", "walk", "walk (hallway of APs) or boundary (standing between two equal APs)")
+	policyName := flag.String("policy", "jev", "decider: jev, or classic (roamctl's algorithm with its default config)")
+	simSeed := flag.Uint64("sim-seed", 0, "simulator seed; runs with the same seed see the identical world (0 = random)")
 	hideHistory := flag.Bool("hide-history", false, "experiment control: omit roam-count, dwell and ping-pong facts from Jev's state")
 	replay := flag.String("replay", "", "serve the dashboard for a recorded journal (no radio, no Jev)")
 	listen := flag.String("listen", "127.0.0.1:8077", "dashboard address")
@@ -105,12 +108,28 @@ func run() error {
 		return srv.Close()
 	}
 
-	key, err := findKey(*keyPath)
-	if err != nil {
-		return err
+	var policy agent.Policy
+	modelName := ""
+	switch *policyName {
+	case "jev":
+		key, err := findKey(*keyPath)
+		if err != nil {
+			return err
+		}
+		jc := jev.New(key)
+		jc.Model = *model
+		modelName = jc.Model
+		policy = &agent.JevPolicy{Client: jc, Timeout: *jevTimeout}
+	case "classic":
+		ccfg, err := config.Default()
+		if err != nil {
+			return fmt.Errorf("classic policy config: %w", err)
+		}
+		policy = agent.NewClassicPolicy(ccfg)
+		modelName = "roamctl default template"
+	default:
+		return fmt.Errorf("unknown -policy %q (jev, classic)", *policyName)
 	}
-	jc := jev.New(key)
-	jc.Model = *model
 
 	cfg := def
 	cfg.Interval = *interval
@@ -132,6 +151,9 @@ func run() error {
 	if *hideHistory {
 		mode += "+nohistory"
 	}
+	if *policyName != "jev" {
+		mode += "+" + *policyName
+	}
 	journal, err := journalPath(*journalDir, mode, *iface)
 	if err != nil {
 		return err
@@ -143,13 +165,15 @@ func run() error {
 	defer store.Close()
 
 	ring := linkq.NewRing(10 * time.Minute)
+	var seed uint64
 	var radio agent.Radio
 	var gateway func() string
 	if *simMode {
-		w, err := sim.NewWorld(ring, *simSpeed, *simScenario)
+		w, err := sim.NewWorld(ring, *simSpeed, *simScenario, *simSeed)
 		if err != nil {
 			return err
 		}
+		seed = w.Seed
 		go w.Run(ctx)
 		radio = w
 		gateway = func() string { return fmt.Sprintf("simulated (client at x=%.0f m)", w.Position()) }
@@ -186,15 +210,16 @@ func run() error {
 		}
 	}
 
-	store.SetInfo(agent.Info{Iface: *iface, Mode: mode, Model: jc.Model,
+	store.SetInfo(agent.Info{Iface: *iface, Mode: mode, Model: modelName,
 		Started: time.Now(), Interval: cfg.Interval.String(),
-		BudgetUSD: cfg.BudgetUSD, Journal: journal, Version: version})
+		BudgetUSD: cfg.BudgetUSD, Journal: journal, Version: version,
+		Policy: policy.Name(), SimSeed: seed})
 	srv := web.Serve(*listen, store)
 	defer func() { _ = srv.Close() }()
 	slog.Info("roamjev started", "mode", mode, "iface", *iface,
-		"model", jc.Model, "dashboard", "http://"+*listen, "journal", journal)
+		"policy", policy.Name(), "model", modelName, "seed", seed, "dashboard", "http://"+*listen, "journal", journal)
 
-	a := agent.New(cfg, radio, ring, jc, store)
+	a := agent.New(cfg, radio, ring, policy, store)
 	a.Gateway = gateway
 	return a.Run(ctx)
 }
