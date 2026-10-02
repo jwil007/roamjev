@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -70,6 +72,7 @@ func (w *WPAS) Link(ctx context.Context) (Link, error) {
 		RxPHY:     info.RxPHY,
 		Width:     info.ChannelWidth,
 		Connected: info.ConnDuration,
+		KeyMgmt:   st.KeyMgmt,
 	}, nil
 }
 
@@ -109,6 +112,8 @@ func (w *WPAS) ScanResults(_ context.Context, ssid string) ([]BSS, error) {
 			EstThroughputKbps: r.EstThruput,
 			Age:               r.Age,
 		})
+		out[len(out)-1].Security, out[len(out)-1].FT =
+			wpac.Security(r.AKMs, r.MobilityDomain)
 	}
 	return out, nil
 }
@@ -161,4 +166,20 @@ func (w *WPAS) Prepare() (func(), error) {
 			slog.Info("wpa_supplicant config restored")
 		}
 	}, nil
+}
+
+func (w *WPAS) Counters() (uint64, uint64, error) {
+	read := func(name string) (uint64, error) {
+		b, err := os.ReadFile("/sys/class/net/" + w.C.Iface + "/statistics/" + name)
+		if err != nil {
+			return 0, err
+		}
+		return strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64)
+	}
+	rx, err := read("rx_bytes")
+	if err != nil {
+		return 0, 0, err
+	}
+	tx, err := read("tx_bytes")
+	return rx, tx, err
 }

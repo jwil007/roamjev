@@ -186,6 +186,7 @@ func run() error {
 
 	ring := linkq.NewRing(10 * time.Minute)
 	var seed uint64
+	var scenarioDesc string
 	var radio agent.Radio
 	var gateway func() string
 	if *simMode {
@@ -196,7 +197,8 @@ func run() error {
 		seed = w.Seed
 		go w.Run(ctx)
 		radio = w
-		gateway = func() string { return fmt.Sprintf("simulated (client at x=%.0f m)", w.Position()) }
+		gateway = w.Position
+		scenarioDesc = w.Describe()
 	} else {
 		if pid, ok := roamctlRunning(*iface); ok && *observe {
 			slog.Info("roamctl is running; observing alongside it (its roams will show as external)",
@@ -233,7 +235,7 @@ func run() error {
 	store.SetInfo(agent.Info{Iface: *iface, Mode: mode, Model: modelName,
 		Started: time.Now(), Interval: cfg.Interval.String(),
 		BudgetUSD: cfg.BudgetUSD, Journal: journal, Version: version,
-		Policy: policy.Name(), SimSeed: seed})
+		Policy: policy.Name(), SimSeed: seed, Scenario: scenarioDesc})
 	srv := web.Serve(*listen, store)
 	defer func() { _ = srv.Close() }()
 	slog.Info("roamjev started", "mode", mode, "iface", *iface,

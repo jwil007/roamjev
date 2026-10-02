@@ -178,6 +178,9 @@ func (c *Client) GetStatus() (Status, error) {
 		if strings.HasPrefix(line, "wpa_state=") {
 			status.WPAState = line[10:]
 		}
+		if strings.HasPrefix(line, "key_mgmt=") {
+			status.KeyMgmt = line[9:]
+		}
 	}
 	return status, nil
 }

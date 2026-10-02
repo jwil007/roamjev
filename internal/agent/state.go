@@ -220,6 +220,9 @@ func (a *Agent) buildState(link Link, cands []Candidate, now time.Time) map[stri
 			}
 		}
 	}
+	if _, ok := cur["channel_utilization_pct"]; !ok && link.UtilPct > 0 {
+		cur["channel_utilization_pct"] = link.UtilPct
+	}
 
 	sig := map[string]any{"rssi_dbm": link.RSSI}
 	if r, ok := a.rssiAt(now.Add(-10*time.Second), a.connChange); ok {
@@ -261,6 +264,8 @@ func (a *Agent) buildState(link Link, cands []Candidate, now time.Time) map[stri
 		}
 		if c.UtilPct >= 0 {
 			m["channel_utilization_pct"] = c.UtilPct
+			m["est_mbps_after_airtime_sharing"] = int(float64(c.EstMbps) *
+				(1 - float64(c.UtilPct)/100))
 		}
 		if c.History != "" {
 			m["history"] = c.History
@@ -280,22 +285,22 @@ func (a *Agent) buildState(link Link, cands []Candidate, now time.Time) map[stri
 		switch {
 		case a.scanBSSID != link.BSSID:
 			scan["since_scan"] = "the scan was taken before the client " +
-				"moved to its current AP; candidate readings are from " +
-				"before that change"
+				"roamed to its current AP"
 		default:
 			d := link.RSSI - a.scanRSSI
+			age := ago(now.Sub(a.scanAt))
 			switch {
 			case d <= -3:
 				scan["since_scan"] = fmt.Sprintf("current AP signal has "+
-					"fallen %d dB since this scan; candidate readings were "+
-					"taken before that change", -d)
+					"fallen %d dB (from %d to %d dBm) since this scan %s",
+					-d, a.scanRSSI, link.RSSI, age)
 			case d >= 3:
 				scan["since_scan"] = fmt.Sprintf("current AP signal has "+
-					"risen %d dB since this scan; candidate readings were "+
-					"taken before that change", d)
+					"risen %d dB (from %d to %d dBm) since this scan %s",
+					d, a.scanRSSI, link.RSSI, age)
 			default:
-				scan["since_scan"] = "current AP signal is about the same " +
-					"as when this scan was taken"
+				scan["since_scan"] = fmt.Sprintf("current AP signal is "+
+					"about the same as when this scan was taken %s", age)
 			}
 		}
 	}
@@ -314,10 +319,10 @@ func (a *Agent) buildState(link Link, cands []Candidate, now time.Time) map[stri
 	}
 
 	return map[string]any{
-		"goal": "Keep the best real-time link quality for this Wi-Fi " +
-			"client, measured as voice MOS to the gateway. Roaming and " +
-			"scanning both briefly interrupt traffic, so changes should " +
-			"be worth their cost.",
+		"briefing":    briefing,
+		"client":      a.clientState(now),
+		"environment": a.environment(link),
+		"action_costs": a.costs(link, cands),
 		"connection": stateLink{
 			AP:     cur,
 			Signal: sig,
@@ -325,6 +330,8 @@ func (a *Agent) buildState(link Link, cands []Candidate, now time.Time) map[stri
 				"tx_mcs": link.TxMCS, "rx_mcs": link.RxMCS,
 				"tx_mbps": link.TxBitrate / 1_000_000,
 				"rx_mbps": link.RxBitrate / 1_000_000,
+				"rx_mbps_after_airtime_sharing": effMbps(link.RxBitrate,
+					curUtil(cur)),
 			},
 			Quality10s:  q10,
 			Quality60s:  qualityMap(w60),
@@ -339,37 +346,60 @@ func (a *Agent) buildState(link Link, cands []Candidate, now time.Time) map[stri
 }
 
 // questions builds the per-call question set. Choice options must be keys,
-// so each candidate is offered under its stable ap_xxxxxx id.
+// so each candidate is offered under its stable ap_xxxxxx id. Action options
+// use TypeSafe's structured criteria (what / not_for) to carry what each
+// option is for; costs live in the state's action_costs.
 func questions(cands []Candidate) map[string]jev.Question {
 	targets := map[string]string{
-		"none": "No candidate would give better link quality than the " +
-			"current AP",
+		"none": "No candidate would give this client a better experience " +
+			"than the current AP",
 	}
 	for _, c := range cands {
 		if c.Current {
 			continue
 		}
-		targets[c.ID] = fmt.Sprintf("%s ch %d, %d dBm (%+d dB vs current)",
+		t := fmt.Sprintf("%s ch %d, %d dBm (%+d dB vs current)",
 			c.Band, c.Channel, c.RSSI, c.RSSIDelta)
+		if c.UtilPct >= 0 {
+			t += fmt.Sprintf(", %d%% busy", c.UtilPct)
+		}
+		targets[c.ID] = t
 	}
 	return map[string]jev.Question{
-		"action": jev.Choice(
-			"What should the Wi-Fi client do right now to keep the best "+
-				"link quality?",
-			map[string]string{
-				"stay": "Keep the current connection; nothing needs to " +
-					"change right now",
-				"scan_targeted": "Briefly scan only the channels of " +
-					"known APs to refresh their measurements",
-				"scan_full": "Scan every channel to discover APs that " +
-					"are not known yet (longer interruption)",
-				"roam": "Move to a different AP now",
-			}),
+		"action": {Type: "choice",
+			Instructions: "Given the briefing, what the client is doing, the " +
+				"environment and what each action costs, what should the " +
+				"client do right now?",
+			Criteria: map[string]any{
+				"stay": map[string]string{
+					"what":    "Keep the current connection and do nothing now",
+					"not_for": "a link that is clearly failing the client's current needs",
+				},
+				"scan_quick": map[string]string{
+					"what": "Briefly re-measure only the strongest few " +
+						"candidate APs (cheapest scan)",
+					"not_for": "discovering APs that are not known yet",
+				},
+				"scan_known": map[string]string{
+					"what":    "Re-measure every known AP",
+					"not_for": "discovering APs that are not known yet",
+				},
+				"scan_full": map[string]string{
+					"what": "Sweep every channel to discover APs, including " +
+						"ones not seen before (most expensive scan)",
+					"not_for": "refreshing APs that are already known",
+				},
+				"roam": map[string]string{
+					"what": "Move to a different AP now, using the current " +
+						"candidate measurements",
+				},
+			}},
 		"target": jev.Choice(
-			"If the client roamed now, which AP would give the best "+
-				"link quality?", targets),
+			"If the client roamed now, which AP would give it the best "+
+				"experience for what it is doing?", targets),
 		"urgency": jev.Score(
-			"How urgently does this client need a better connection?",
+			"How urgently does this client need a better connection for "+
+				"what it is doing right now?",
 			[]string{
 				"no need to change anything",
 				"could be better but not pressing",
@@ -377,11 +407,11 @@ func questions(cands []Candidate) map[string]jev.Question {
 				"link is failing and needs action immediately",
 			}),
 		"link_degraded": jev.Noul(
-			"Is the current connection's link quality degraded or " +
-				"likely to degrade soon?"),
+			"Is the current connection degraded, or likely to degrade " +
+				"soon, for what the client is doing?"),
 		"better_ap_available": jev.Noul(
-			"Is there a candidate AP that would clearly give better " +
-				"link quality than the current AP?"),
+			"Is there a candidate AP that would clearly give this client " +
+				"a better experience than the current AP?"),
 		"roam_short_lived": jev.Noul(
 			"If the client roamed now, would that roam likely be " +
 				"short-lived or reversed soon?"),
@@ -398,4 +428,11 @@ func candidateIDs(cands []Candidate) map[string]string {
 		m[c.ID] = c.BSSID
 	}
 	return m
+}
+
+func curUtil(cur map[string]any) int {
+	if u, ok := cur["channel_utilization_pct"].(int); ok {
+		return u
+	}
+	return 0
 }

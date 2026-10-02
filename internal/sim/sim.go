@@ -1,8 +1,11 @@
-// Package sim fakes a Wi-Fi environment so the agent and UI can be exercised
-// end to end (with real Jev calls) without touching a radio. A client walks
-// a hallway lined with APs; RSSI follows log-distance path loss with slow
-// shadowing, and link quality degrades with low SNR and channel load. Scans
-// and roams cost probe loss, just as they cost airtime on a real link.
+// Package sim fakes Wi-Fi environments so the agent and UI can be exercised
+// end to end (with real Jev calls) without touching a radio. Each scenario
+// (see scenarios.go) defines AP layout, load, security, the client's path
+// and what it's doing. RSSI follows log-distance path loss with slow
+// shadowing; link quality degrades with low SNR and channel load. Scans take
+// the radio off its home channel for each channel's dwell, and roams
+// interrupt traffic for a time set by the network's security, so both cost
+// what they cost on a real link.
 package sim
 
 import (
@@ -10,6 +13,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand/v2"
+	"slices"
 	"sync"
 	"time"
 
@@ -20,6 +24,7 @@ import (
 const noiseFloor = -95
 
 type ap struct {
+	idx     int // physical AP index in the scenario
 	bssid   string
 	x, y    float64
 	freq    int
@@ -31,30 +36,25 @@ type ap struct {
 	pl1m    float64
 	util    float64
 	shadow  float64
-	ft      bool
 }
 
 type World struct {
-	SSID  string
-	Speed float64 // walking speed, m/s
-	// Scenario is "walk" (hallway of APs) or "boundary" (standing still
-	// midway between two equal APs: the classic ping-pong setup).
-	Scenario string
-	// shadowStep scales the slow shadowing random walk.
-	shadowStep float64
+	SSID string
 	// Seed drives two independent streams: wr for the world itself (walk,
-	// pauses, shadowing, congestion) and nr for measurement noise and roam
-	// luck. Two runs with the same seed see the identical world, whatever
-	// their deciders do.
+	// pauses, shadowing, load, activity) and nr for measurement noise and
+	// roam luck. Two runs with the same seed see the identical world,
+	// whatever their deciders do.
 	Seed uint64
+	sc   *scenario
 	wr   *rand.Rand
 	nr   *rand.Rand
 
 	mu       sync.Mutex
 	aps      []*ap
-	x        float64
-	dir      float64
-	pauseTil time.Time
+	x, y     float64
+	wp       int       // waypoint being walked to (or paused at)
+	pauseTil time.Time // paused until
+	arrived  bool
 	cur      *ap
 	since    time.Time
 	busy     string // "scan" or "roam" while the radio is off channel
@@ -65,62 +65,102 @@ type World struct {
 	down     bool
 	tcpOut   uint64
 	tcpRetx  uint64
+	rxBytes  float64
+	txBytes  float64
+	activity string
+	actTil   time.Time
 	// cf holds, per AP, the probes the client would have measured had it
 	// stayed associated there: the counterfactual a roam is graded against.
 	cf map[string]*linkq.Ring
 }
 
+// NewWorld builds a scenario. speed overrides the scenario's walking speed
+// when > 0.
 func NewWorld(ring *linkq.Ring, speed float64, scenario string, seed uint64) (*World, error) {
+	sc, err := scenarioByName(scenario)
+	if err != nil {
+		return nil, err
+	}
 	if seed == 0 {
 		seed = uint64(time.Now().UnixNano())
 	}
-	w := &World{SSID: "lab-sim", Speed: speed, ring: ring, dir: 1,
+	if speed > 0 && sc.speed > 0 {
+		sc.speed = speed
+	}
+	w := &World{SSID: "lab-sim", Seed: seed, sc: sc, ring: ring,
+		wr:    rand.New(rand.NewPCG(seed, 1)),
+		nr:    rand.New(rand.NewPCG(seed, 2)),
 		cache: map[string]agent.BSS{}, cacheAt: map[string]time.Time{},
-		start: time.Now(), x: 2, Scenario: scenario, shadowStep: 0.6,
-		Seed: seed, wr: rand.New(rand.NewPCG(seed, 1)),
-		nr: rand.New(rand.NewPCG(seed, 2))}
-	add := func(i int, x float64, freq, ch int, band, width, phy string,
-		tx, pl float64) {
-		w.aps = append(w.aps, &ap{
-			bssid: fmt.Sprintf("02:5a:%02x:00:%02x:%02x", i, freq%256, ch),
-			x:     x, y: 4, freq: freq, channel: ch, band: band, width: width,
-			phy: phy, txPower: tx, pl1m: pl, util: 15 + w.wr.Float64()*20,
-			ft: true,
-		})
+		start: time.Now(), cf: map[string]*linkq.Ring{}}
+	for i, s := range sc.aps {
+		for _, r := range s.radios {
+			freq := chanFreq(r.band, r.channel)
+			pl := 46.4 // 5 GHz free-space loss at 1 m
+			switch r.band {
+			case "2.4GHz":
+				pl = 40.0
+			case "6GHz":
+				pl = 48.0
+			}
+			a := &ap{idx: i,
+				bssid: fmt.Sprintf("02:5a:%02x:%02x:%02x:%02x", i+1,
+					len(w.aps), freq%256, r.channel),
+				x: s.x, y: s.y, freq: freq, channel: r.channel, band: r.band,
+				width: r.width, phy: r.phy, txPower: r.txPower, pl1m: pl,
+				util: s.baseUtil}
+			w.aps = append(w.aps, a)
+			w.cf[a.bssid] = linkq.NewRing(5 * time.Minute)
+		}
 	}
-	if scenario == "boundary" {
-		// Two identical 5 GHz APs 90 m apart; the client stands midway at
-		// about -76 dBm from each: the marginal edge where real ping-pong
-		// happens. Shadowing (~3 dB) keeps swapping which one looks
-		// stronger, and dips on either cost some loss, so roaming always
-		// looks tempting but rarely helps for long.
-		add(1, 0, 5180, 36, "5GHz", "80MHz", "802.11ax", 20, 46.4)
-		add(2, 90, 5745, 149, "5GHz", "80MHz", "802.11ax", 20, 46.4)
-		w.x, w.Speed, w.shadowStep = 45, 0, 2.0
-		w.cur, w.since = w.aps[0], time.Now()
-		return w, nil
-	}
-	if scenario != "walk" && scenario != "" {
-		return nil, fmt.Errorf("unknown sim scenario %q (walk, boundary)", scenario)
-	}
-	// Four dual-band APs along an 80 m hallway, plus a 2.4 GHz-only AP.
-	chans5 := []int{36, 100, 149, 52}
-	chans6 := []int{37, 85, 133, 181}
-	for i, x := range []float64{0, 26, 52, 78} {
-		add(i+1, x, 5000+5*chans5[i], chans5[i], "5GHz", "80MHz",
-			"802.11ax", 20, 46.4)
-		add(i+1, x, 5950+5*chans6[i], chans6[i], "6GHz", "160MHz",
-			"802.11be", 18, 48.0)
-	}
-	add(9, 39, 2437, 6, "2.4GHz", "20MHz", "802.11n", 17, 40.0)
+	w.x, w.y = sc.path[0].x, sc.path[0].y
+	w.wp, w.arrived = 0, true
+	w.pauseTil = w.start.Add(w.pause(sc.path[0]))
+	// Start on the strongest AP, like a fresh association.
 	w.cur = w.aps[0]
-	w.since = time.Now()
+	for _, a := range w.aps {
+		if w.rssiOf(a) > w.rssiOf(w.cur) {
+			w.cur = a
+		}
+	}
+	w.since = w.start
+	w.nextActivity(w.start)
 	return w, nil
 }
 
+func chanFreq(band string, ch int) int {
+	switch band {
+	case "2.4GHz":
+		return 2407 + 5*ch
+	case "6GHz":
+		return 5950 + 5*ch
+	}
+	return 5000 + 5*ch
+}
+
+func (w *World) pause(p waypoint) time.Duration {
+	s := p.pauseMin + w.wr.Float64()*(p.pauseMax-p.pauseMin)
+	return time.Duration(s * float64(time.Second))
+}
+
+func (w *World) nextActivity(now time.Time) {
+	var total float64
+	for _, p := range w.sc.traffic {
+		total += p.weight
+	}
+	r := w.wr.Float64() * total
+	for _, p := range w.sc.traffic {
+		if r -= p.weight; r <= 0 {
+			w.activity = p.kind
+			d := p.minS + w.wr.Float64()*(p.maxS-p.minS)
+			w.actTil = now.Add(time.Duration(d * float64(time.Second)))
+			return
+		}
+	}
+}
+
 func (w *World) rssiOf(a *ap) float64 {
-	d := math.Max(1, math.Hypot(a.x-w.x, a.y))
-	return a.txPower - (a.pl1m + 30*math.Log10(d)) + a.shadow
+	d := math.Max(1, math.Hypot(a.x-w.x, a.y-w.y))
+	return a.txPower - (a.pl1m + 10*w.sc.exponent*math.Log10(d)) + a.shadow
 }
 
 // Run advances the world and generates ARP-like probe samples into the ring.
@@ -137,6 +177,7 @@ func (w *World) Run(ctx context.Context) {
 			w.advance(now, step.Seconds())
 			w.probeCounterfactuals(now)
 			s, out, retx := w.probe(now)
+			w.traffic(step.Seconds())
 			w.tcpOut += out
 			w.tcpRetx += retx
 			tcp := linkq.TCPSample{At: now, OutSegs: w.tcpOut,
@@ -149,22 +190,42 @@ func (w *World) Run(ctx context.Context) {
 }
 
 func (w *World) advance(now time.Time, dt float64) {
-	if w.Speed > 0 && now.After(w.pauseTil) {
-		w.x += w.dir * w.Speed * dt
-		// Turn around at the ends; sometimes stop at a "desk".
-		if w.x > 82 || w.x < -4 {
-			w.dir = -w.dir
+	sc := w.sc
+	// Movement along the waypoint loop, with planned stops at waypoints and
+	// occasional unplanned ones along the way.
+	if sc.speed > 0 && now.After(w.pauseTil) {
+		if w.arrived {
+			w.wp = (w.wp + 1) % len(sc.path)
+			w.arrived = false
 		}
-		if w.wr.Float64() < dt/40 {
-			w.pauseTil = now.Add(time.Duration(15+w.wr.IntN(30)) * time.Second)
+		tgt := sc.path[w.wp]
+		dx, dy := tgt.x-w.x, tgt.y-w.y
+		dist := math.Hypot(dx, dy)
+		stepLen := sc.speed * dt
+		if dist <= stepLen {
+			w.x, w.y = tgt.x, tgt.y
+			w.arrived = true
+			w.pauseTil = now.Add(w.pause(tgt))
+		} else {
+			w.x += dx / dist * stepLen
+			w.y += dy / dist * stepLen
+			if sc.pauseEvery > 0 && w.wr.Float64() < dt/sc.pauseEvery {
+				w.pauseTil = now.Add(time.Duration(5+w.wr.IntN(20)) * time.Second)
+			}
 		}
 	}
-	for i, a := range w.aps {
-		a.shadow += (w.wr.Float64()-0.5)*w.shadowStep - a.shadow*0.02
-		// AP 3's radios get congested for a minute out of every three.
-		target := 20.0
-		if i/2 == 2 && int(now.Sub(w.start).Minutes())%3 == 1 {
-			target = 88
+	if now.After(w.actTil) {
+		w.nextActivity(now)
+	}
+	el := now.Sub(w.start)
+	for _, a := range w.aps {
+		a.shadow += (w.wr.Float64()-0.5)*sc.shadow - a.shadow*0.02
+		target := sc.aps[a.idx].baseUtil + sc.hot(a.idx, el)
+		switch a.band {
+		case "2.4GHz":
+			target += 15
+		case "6GHz":
+			target -= 12
 		}
 		a.util += (target-a.util)*0.05 + (w.wr.Float64()-0.5)*2
 		a.util = math.Max(1, math.Min(99, a.util))
@@ -191,6 +252,35 @@ func (w *World) advance(now time.Time, dt float64) {
 	}
 }
 
+// traffic accumulates interface bytes for the current activity. A download
+// takes what the link can carry; nothing moves while off channel.
+func (w *World) traffic(dt float64) {
+	if w.down || w.busy != "" {
+		w.rxBytes += 50 * dt
+		return
+	}
+	switch w.activity {
+	case "idle":
+		w.rxBytes += 300 * dt
+		w.txBytes += 200 * dt
+	case "call":
+		w.rxBytes += 12_500 * dt // ~100 kb/s each way
+		w.txBytes += 12_500 * dt
+	case "download":
+		mbps := math.Min(w.effMbps(w.cur), 300)
+		w.rxBytes += mbps * 1e6 / 8 * dt
+		w.txBytes += mbps * 1e6 / 8 * dt / 40
+	}
+}
+
+// effMbps is what the link can actually deliver: PHY rate times the
+// airtime left over by other clients, times a MAC efficiency factor.
+func (w *World) effMbps(a *ap) float64 {
+	snr := w.rssiOf(a) - noiseFloor
+	return float64(rateFor(mcsFor(snr), a.width)) / 1e6 *
+		(1 - a.util/100) * 0.6
+}
+
 func (w *World) probe(now time.Time) (linkq.Sample, uint64, uint64) {
 	if w.down || w.busy == "roam" {
 		return linkq.Sample{At: now, Lost: true}, 0, 0
@@ -201,12 +291,6 @@ func (w *World) probe(now time.Time) (linkq.Sample, uint64, uint64) {
 // probeCounterfactuals samples every AP as if the client were associated to
 // it and not scanning. Below the sensitivity floor it would have dropped.
 func (w *World) probeCounterfactuals(now time.Time) {
-	if w.cf == nil {
-		w.cf = map[string]*linkq.Ring{}
-		for _, a := range w.aps {
-			w.cf[a.bssid] = linkq.NewRing(5 * time.Minute)
-		}
-	}
 	for _, a := range w.aps {
 		s := linkq.Sample{At: now, Lost: true}
 		if w.rssiOf(a) >= -88 {
@@ -234,7 +318,8 @@ func (w *World) probeAP(now time.Time, a *ap, scanning bool) (linkq.Sample, uint
 	util := a.util
 	pLoss := 0.5/(1+math.Exp((snr-12)/2.2)) + math.Max(0, util-60)/40*0.08
 	if scanning {
-		pLoss += 0.45
+		// Off the home channel for most of a scan.
+		pLoss += 0.8
 	}
 	lat := 1.5 + math.Max(0, 25-snr)*0.8 + math.Max(0, util-40)*0.25
 	lat += math.Abs(w.nr.NormFloat64()) * (1 + math.Max(0, util-50)*0.12 +
@@ -262,10 +347,22 @@ func mcsFor(snr float64) int {
 
 func rateFor(mcs int, width string) int {
 	base := []float64{8.6, 17.2, 25.8, 34.4, 51.6, 68.8, 77.4, 86, 103.2,
-		114.7, 129, 143.4} // 802.11ax 20 MHz, 2SS, 0.8 us GI
+		114.7, 129, 143.4} // 802.11ax 20 MHz, 1SS, 0.8 us GI
 	f := map[string]float64{"20MHz": 1, "40MHz": 2, "80MHz": 4.2,
 		"160MHz": 8.4}[width]
 	return int(base[min(mcs, 11)] * f * 2 * 1e6)
+}
+
+func (w *World) keyMgmt() string {
+	switch {
+	case w.sc.security == "802.1X/EAP" && w.sc.ft:
+		return "FT-EAP"
+	case w.sc.security == "802.1X/EAP":
+		return "WPA2/IEEE 802.1X/EAP"
+	case w.sc.ft:
+		return "FT-PSK"
+	}
+	return "WPA2-PSK"
 }
 
 func (w *World) Link(_ context.Context) (agent.Link, error) {
@@ -284,13 +381,19 @@ func (w *World) Link(_ context.Context) (agent.Link, error) {
 		RxBitrate: rateFor(m, w.cur.width),
 		TxPHY:     "HE", RxPHY: "HE", Width: w.cur.width,
 		Connected: time.Since(w.since),
+		KeyMgmt:   w.keyMgmt(),
+		UtilPct:   int(w.cur.util),
 	}, nil
 }
 
 func (w *World) Scan(ctx context.Context, freqs []int) error {
-	n := len(freqs)
-	if freqs == nil {
-		n = 38 // a 2.4+5+6 GHz sweep (6 GHz PSC only)
+	list := freqs
+	if list == nil {
+		list = fullScanFreqs()
+	}
+	var ms float64
+	for _, f := range list {
+		ms += dwellMs(f)
 	}
 	w.mu.Lock()
 	w.busy = "scan"
@@ -303,17 +406,17 @@ func (w *World) Scan(ctx context.Context, freqs []int) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-time.After(time.Duration(n) * 70 * time.Millisecond):
+	case <-time.After(time.Duration(ms * float64(time.Millisecond))):
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	want := map[int]bool{}
-	for _, f := range freqs {
+	for _, f := range list {
 		want[f] = true
 	}
 	now := time.Now()
 	for _, a := range w.aps {
-		if freqs != nil && !want[a.freq] {
+		if !want[a.freq] {
 			continue
 		}
 		rssi := w.rssiOf(a) + w.nr.NormFloat64()*2
@@ -325,9 +428,9 @@ func (w *World) Scan(ctx context.Context, freqs []int) error {
 			BSSID: a.bssid, SSID: w.SSID, Freq: a.freq, Channel: a.channel,
 			Band: a.band, RSSI: int(math.Round(rssi)),
 			SNR: int(math.Round(rssi)) - noiseFloor, Width: a.width,
-			PHY: a.phy, UtilPct: int(a.util), Stations: 3 + int(a.util/8),
-			EstThroughputKbps: rateFor(mcsFor(rssi-noiseFloor), a.width) /
-				2000,
+			PHY: a.phy, UtilPct: int(a.util), Stations: 3 + int(a.util/4),
+			EstThroughputKbps: rateFor(mcsFor(rssi-noiseFloor), a.width) / 2000,
+			Security:          w.sc.security, FT: w.sc.ft,
 		}
 		w.cacheAt[a.bssid] = now
 	}
@@ -342,6 +445,7 @@ func (w *World) ScanResults(_ context.Context, _ string) ([]agent.BSS, error) {
 		b.Age = time.Since(w.cacheAt[k])
 		out = append(out, b)
 	}
+	slices.SortFunc(out, func(a, b agent.BSS) int { return b.RSSI - a.RSSI })
 	return out, nil
 }
 
@@ -359,11 +463,8 @@ func (w *World) Roam(ctx context.Context, bssid string) (agent.RoamResult, error
 	}
 	w.busy = "roam"
 	rssi := w.rssiOf(target)
-	d := 60 * time.Millisecond
-	if !target.ft {
-		d = 350 * time.Millisecond
-	}
-	d += time.Duration(w.nr.IntN(40)) * time.Millisecond
+	d := time.Duration(w.sc.roamMs(w.nr) * float64(time.Millisecond))
+	fail := rssi < -82 || w.nr.Float64() < 0.03
 	w.mu.Unlock()
 	select {
 	case <-ctx.Done():
@@ -373,7 +474,7 @@ func (w *World) Roam(ctx context.Context, bssid string) (agent.RoamResult, error
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.busy = ""
-	if rssi < -82 || w.nr.Float64() < 0.03 {
+	if fail {
 		return agent.RoamResult{Duration: d,
 			Message: "Assoc rejected - Association denied, poor channel " +
 				"conditions"}, nil
@@ -384,9 +485,26 @@ func (w *World) Roam(ctx context.Context, bssid string) (agent.RoamResult, error
 
 func (w *World) Prepare() (func(), error) { return func() {}, nil }
 
-// Position reports the client's x position, for the UI.
-func (w *World) Position() float64 {
+func (w *World) Counters() (uint64, uint64, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.x
+	return uint64(w.rxBytes), uint64(w.txBytes), nil
 }
+
+// Activity implements agent.ActivityReporter (grading only).
+func (w *World) Activity() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.activity
+}
+
+// Position reports the client's position and the scenario, for the UI.
+func (w *World) Position() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return fmt.Sprintf("simulated %s (client at %.0f, %.0f m; %s)",
+		w.sc.name, w.x, w.y, w.activity)
+}
+
+// Describe summarizes the scenario.
+func (w *World) Describe() string { return w.sc.describe }

@@ -16,6 +16,13 @@ type Summary struct {
 	PctGood       float64 // share of connected seconds with MOS >= 4.03
 	PctDown       float64
 	AvgRxMbps     float64 // PHY rate: what the link could carry
+	AvgEffMbps    float64 // PHY rate x free airtime
+	// Judged when each matters (simulator ground truth for the activity).
+	PctGoodOnCall  float64 // share of call seconds with MOS >= 4.03
+	MOSOnCall      float64 // average MOS during calls
+	EffOnDownload  float64 // avg effective Mb/s during downloads
+	PctOffChannel  float64 // share of the run spent scanning or roaming
+	AvgRoamMs      float64
 	AvgRSSI       float64
 	PctWeak       float64 // share of connected seconds below -75 dBm
 	PctLowMCS     float64 // share of connected seconds at rx MCS <= 3
@@ -52,8 +59,8 @@ func Summarize(s *Store) Summary {
 	if n := len(snap.Ticks); n > 1 {
 		sum.Duration = snap.Ticks[n-1].T.Sub(snap.Ticks[0].T)
 	}
-	var mosSum, rateSum, rssiSum float64
-	var conn, good, down, linked, weak, lowMCS int
+	var mosSum, rateSum, rssiSum, effSum, dlEff, callMOS float64
+	var conn, good, down, linked, weak, lowMCS, calls, callGood, dls int
 	type change struct {
 		t        time.Time
 		from, to string
@@ -81,6 +88,18 @@ func Summarize(s *Store) Summary {
 		stayRSSI = append(stayRSSI, t.RSSI)
 		linked++
 		rateSum += t.RxMbps
+		effSum += t.EffMbps
+		switch t.Activity {
+		case "call":
+			calls++
+			callMOS += t.MOS
+			if t.MOS >= 4.03 {
+				callGood++
+			}
+		case "download":
+			dls++
+			dlEff += t.EffMbps
+		}
 		rssiSum += float64(t.RSSI)
 		if t.RSSI < -75 {
 			weak++
@@ -109,6 +128,14 @@ func Summarize(s *Store) Summary {
 		sum.AvgRSSI = rssiSum / float64(linked)
 		sum.PctWeak = 100 * float64(weak) / float64(linked)
 		sum.PctLowMCS = 100 * float64(lowMCS) / float64(linked)
+		sum.AvgEffMbps = effSum / float64(linked)
+	}
+	if calls > 0 {
+		sum.PctGoodOnCall = 100 * float64(callGood) / float64(calls)
+		sum.MOSOnCall = callMOS / float64(calls)
+	}
+	if dls > 0 {
+		sum.EffOnDownload = dlEff / float64(dls)
 	}
 	sum.APChanges = len(changes)
 	for i := 1; i < len(changes); i++ {
@@ -144,6 +171,21 @@ func Summarize(s *Store) Summary {
 		if a.Kind != "roam" {
 			sum.ScanTime += time.Duration(a.DurationMs * float64(time.Millisecond))
 		}
+	}
+	var roamMs float64
+	var nr int
+	for _, a := range snap.Actions {
+		if a.Kind == "roam" {
+			roamMs += a.DurationMs
+			nr++
+		}
+	}
+	if nr > 0 {
+		sum.AvgRoamMs = roamMs / float64(nr)
+	}
+	if sum.Duration > 0 {
+		sum.PctOffChannel = 100 * (sum.ScanTime.Seconds() + roamMs/1000) /
+			sum.Duration.Seconds()
 	}
 	var dsum float64
 	var dn int
@@ -213,6 +255,8 @@ func (s Summary) Print(w io.Writer, name string) {
 	_, _ = fmt.Fprintf(w, "%s  [%s]\n", name, s.Mode)
 	p("duration", "%s", s.Duration.Round(time.Second))
 	p("average MOS", "%.2f  (%.0f%% of time good, %.1f%% disconnected)", s.AvgMOS, s.PctGood, s.PctDown)
+	p("by activity", "calls: avg MOS %.2f, good %.1f%% of the time; downloads: %.0f Mb/s effective", s.MOSOnCall, s.PctGoodOnCall, s.EffOnDownload)
+	p("off channel", "%.2f%% of the run scanning or roaming (avg roam %.0f ms)", s.PctOffChannel, s.AvgRoamMs)
 	p("signal and rate", "avg RSSI %.1f dBm, avg rx PHY rate %.0f Mb/s, %.1f%% of time below -75 dBm, %.1f%% at MCS <= 3", s.AvgRSSI, s.AvgRxMbps, s.PctWeak, s.PctLowMCS)
 	p("AP changes", "%d  (ping-pongs: %d, justified quick returns: %d, average stay %s)", s.APChanges, s.PingPongs, s.Justified, s.AvgStay.Round(time.Second))
 	p("roams", "%d ok, %d failed", s.RoamsOK, s.RoamsFailed)

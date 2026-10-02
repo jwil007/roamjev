@@ -48,7 +48,10 @@ func parseTLVs(tlvs []tlv) (IEBSS, error) {
 			q := parseQBSSLoad(tlv.v)
 			ie.QBSSStaCt = q.stationCount
 			ie.QBSSUtil = q.channelUtilization
-		//case 48: //RSN Information
+		case 48: //RSN Information
+			ie.AKMs = parseRSNAKMs(tlv.v)
+		case 54: //Mobility Domain (802.11r)
+			ie.MobilityDomain = true
 		//case 50: //Extended Supported Rates
 		//case 45: //HT Capabilities
 		case 61: //HT Operation

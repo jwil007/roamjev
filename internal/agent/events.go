@@ -29,6 +29,12 @@ type Tick struct {
 	TCPRetransPct float64   `json:"tcp_retrans_pct"`
 	TCPOutSegs    uint64    `json:"tcp_out_segs"`
 	Connected     bool      `json:"connected"`
+	UtilPct       int       `json:"util_pct,omitempty"`
+	EffMbps       float64   `json:"eff_mbps,omitempty"`
+	TrafficKbps   float64   `json:"traffic_kbps,omitempty"`
+	// Activity is the simulator's ground truth (idle/call/download), used
+	// only for grading; Jev never sees it.
+	Activity string `json:"activity,omitempty"`
 }
 
 // Decision is one Jev call: exactly what it saw, what it answered, and what
@@ -123,6 +129,7 @@ type Info struct {
 	Version   string    `json:"version"`
 	Policy    string    `json:"policy,omitempty"`
 	SimSeed   uint64    `json:"sim_seed,omitempty"`
+	Scenario  string    `json:"scenario,omitempty"`
 	Replay    bool      `json:"replay,omitempty"`
 }
 

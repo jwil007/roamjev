@@ -26,7 +26,7 @@ func TestRailCheck(t *testing.T) {
 		{"roam low conf", Decision{Chosen: "roam", Target: tgt, Confidence: 0.3}, time.Time{}, time.Time{}, false, "stay", "confidence"},
 		{"roam cooldown", Decision{Chosen: "roam", Target: tgt, Confidence: 0.9}, now.Add(-2 * time.Second), time.Time{}, false, "stay", "roam rail"},
 		{"scan ok", Decision{Chosen: "scan_full"}, time.Time{}, now.Add(-time.Minute), false, "scan_full", ""},
-		{"scan too soon", Decision{Chosen: "scan_targeted"}, time.Time{}, now.Add(-time.Second), false, "stay", "scan rail"},
+		{"scan too soon", Decision{Chosen: "scan_known"}, time.Time{}, now.Add(-time.Second), false, "stay", "scan rail"},
 		{"observe", Decision{Chosen: "roam", Target: tgt, Confidence: 0.9}, time.Time{}, time.Time{}, true, "stay", "observe"},
 	}
 	for _, c := range cases {

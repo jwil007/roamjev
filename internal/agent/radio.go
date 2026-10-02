@@ -22,6 +22,13 @@ type Link struct {
 	RxPHY     string
 	Width     string
 	Connected time.Duration
+	// KeyMgmt is the association's key management as wpa_supplicant
+	// reports it (FT-PSK, WPA2-PSK, SAE, ...); FT-* means 802.11r roams.
+	KeyMgmt string
+	// UtilPct is the current AP's channel utilization when the radio knows
+	// it (the simulator does); -1 or 0 means unknown, and the agent falls
+	// back to the AP's QBSS Load from the scan cache.
+	UtilPct int
 }
 
 // BSS is one scan result.
@@ -40,6 +47,11 @@ type BSS struct {
 	// EstThroughputKbps is wpa_supplicant's estimate from RSSI, width and PHY.
 	EstThroughputKbps int
 	Age               time.Duration
+	// Security is the strongest auth the AP offers (WPA2-PSK, WPA3-SAE,
+	// 802.1X/EAP, open); FT is 802.11r support. Together they largely set
+	// how long a roam to this AP interrupts traffic.
+	Security string
+	FT       bool
 }
 
 type RoamResult struct {
@@ -60,6 +72,16 @@ type Radio interface {
 	// Prepare stops wpa_supplicant roaming on its own; the returned func
 	// restores the original settings.
 	Prepare() (restore func(), err error)
+	// Counters returns cumulative interface bytes, for measuring what the
+	// client is doing (idle, light, heavy traffic).
+	Counters() (rx, tx uint64, err error)
+}
+
+// ActivityReporter is implemented by the simulator, which knows what the
+// client is doing (idle, call, download). Used only for grading: Jev sees
+// measured traffic rates, never this ground truth.
+type ActivityReporter interface {
+	Activity() string
 }
 
 // Counterfactual is implemented by radios (the simulator) that know what

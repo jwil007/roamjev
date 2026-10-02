@@ -37,7 +37,12 @@ func Compare(w io.Writer, runs map[RunKey]Summary) {
 		format string
 	}
 	metrics := []metric{
+		{"avg MOS on calls", func(s Summary) float64 { return s.MOSOnCall }, true, "%.3f"},
+		{"good MOS on calls (%)", func(s Summary) float64 { return s.PctGoodOnCall }, true, "%.1f"},
+		{"eff Mb/s on downloads", func(s Summary) float64 { return s.EffOnDownload }, true, "%.0f"},
+		{"time off channel (%)", func(s Summary) float64 { return s.PctOffChannel }, false, "%.2f"},
 		{"time with good MOS (%)", func(s Summary) float64 { return s.PctGood }, true, "%.1f"},
+		{"avg effective Mb/s", func(s Summary) float64 { return s.AvgEffMbps }, true, "%.0f"},
 		{"average MOS", func(s Summary) float64 { return s.AvgMOS }, true, "%.3f"},
 		{"avg rx PHY rate (Mb/s)", func(s Summary) float64 { return s.AvgRxMbps }, true, "%.0f"},
 		{"avg RSSI (dBm)", func(s Summary) float64 { return s.AvgRSSI }, true, "%.1f"},

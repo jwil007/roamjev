@@ -30,6 +30,7 @@ type WPAConfig struct {
 type Status struct {
 	SSID     string
 	WPAState string
+	KeyMgmt  string // e.g. FT-PSK, WPA2-PSK, SAE, WPA2/IEEE 802.1X/EAP
 }
 
 type RoamStats struct {
@@ -98,6 +99,10 @@ type IEBSS struct {
 	QBSSUtil       uint8
 	QBSSStaCt      uint16
 	PHYType        PHYType
+	// AKMs are the RSN AKM suite types offered (OUI 00-0F-AC), and
+	// MobilityDomain is set when the AP advertises 802.11r (MDE, IE 54).
+	AKMs           []uint8
+	MobilityDomain bool
 }
 
 var supportedRates = map[byte]string{

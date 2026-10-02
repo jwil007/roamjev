@@ -10,7 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"slices"
+	"math"
+	"strings"
 	"sync"
 	"time"
 
@@ -72,6 +73,9 @@ type Agent struct {
 	connChange time.Time
 	prevBSSID  string
 	visits     []visit
+	// Measured costs (decision loop only).
+	dwellActive, dwellPassive, fullScanMs float64
+	roamDurs                              []int
 	mem        map[string]*bssMemory
 	recent     []string
 	decisionID int
@@ -79,9 +83,10 @@ type Agent struct {
 	notReady   bool
 	outcomeCh  chan Outcome
 
-	mu      sync.Mutex // guards the fields below (shared with tick loop)
-	link    Link
-	rssiHis []rssiPoint
+	mu       sync.Mutex // guards the fields below (shared with tick loop)
+	link     Link
+	rssiHis  []rssiPoint
+	counters []counterPoint
 	busy    string
 	calls   int
 	errs    int
@@ -217,7 +222,14 @@ func (a *Agent) tickLoop(ctx context.Context) {
 			}
 			w := a.q.Last(3 * time.Second)
 			connected := l.WPAState == "COMPLETED" && l.BSSID != ""
+			rx, tx, cerr := a.radio.Counters()
 			a.mu.Lock()
+			if cerr == nil {
+				a.counters = append(a.counters, counterPoint{now, rx, tx})
+				if len(a.counters) > 120 {
+					a.counters = a.counters[len(a.counters)-120:]
+				}
+			}
 			a.link = l
 			if connected && l.RSSI < -1 {
 				a.rssiHis = append(a.rssiHis, rssiPoint{now, l.RSSI})
@@ -226,7 +238,16 @@ func (a *Agent) tickLoop(ctx context.Context) {
 				}
 			}
 			a.mu.Unlock()
+			kbps, _ := a.trafficKbps(now, 3*time.Second)
+			activity := ""
+			if ar, ok := a.radio.(ActivityReporter); ok {
+				activity = ar.Activity()
+			}
 			a.store.AddTick(Tick{
+				UtilPct:     l.UtilPct,
+				EffMbps:     effMbps(l.RxBitrate, l.UtilPct),
+				TrafficKbps: math.Round(kbps),
+				Activity:    activity,
 				T: now, BSSID: l.BSSID, Freq: l.Freq, RSSI: l.RSSI,
 				TxMCS: l.TxMCS, RxMCS: l.RxMCS,
 				TxMbps:    float64(l.TxBitrate) / 1e6,
@@ -365,6 +386,9 @@ func (a *Agent) decide(ctx context.Context, trigger string,
 	d.Tokens = out.Tokens
 	d.CostUSD = out.CostUSD
 	d.Chosen, d.Confidence, d.Target = out.Chosen, out.Confidence, out.Target
+	if d.Chosen == "scan_targeted" {
+		d.Chosen = "scan_known" // older name, still used by the classic policy
+	}
 	if tgt, ok := out.Answers["target"]; ok {
 		for i := range cands {
 			cands[i].Prob = tgt.Probabilities[cands[i].ID]
@@ -380,8 +404,8 @@ func (a *Agent) decide(ctx context.Context, trigger string,
 	a.store.AddDecision(d)
 
 	switch d.Executed {
-	case "scan_targeted", "scan_full":
-		a.doScan(ctx, d, link)
+	case "scan_quick", "scan_known", "scan_full":
+		a.doScan(ctx, d, link, cands)
 		again <- "scan_complete"
 	case "roam":
 		a.doRoam(ctx, d, link)
@@ -394,7 +418,7 @@ func (a *Agent) railCheck(d Decision, link Link, now time.Time) (string, string)
 	switch d.Chosen {
 	case "stay", "":
 		return "stay", ""
-	case "scan_targeted", "scan_full":
+	case "scan_quick", "scan_known", "scan_full":
 		if a.cfg.Observe {
 			return "stay", "observe mode"
 		}
@@ -425,21 +449,19 @@ func (a *Agent) railCheck(d Decision, link Link, now time.Time) (string, string)
 	return "stay", "unknown action " + d.Chosen
 }
 
-func (a *Agent) doScan(ctx context.Context, d Decision, link Link) {
-	kind := "full"
+func (a *Agent) doScan(ctx context.Context, d Decision, link Link,
+	cands []Candidate) {
+	quick, known := a.scanScopes(link, cands)
+	kind := strings.TrimPrefix(d.Executed, "scan_")
 	var freqs []int
-	if d.Executed == "scan_targeted" {
-		kind = "targeted"
-		for _, b := range a.scan {
-			freqs = append(freqs, b.Freq)
-		}
-		freqs = append(freqs, link.Freq)
-		slices.Sort(freqs)
-		freqs = slices.Compact(freqs)
-		if len(a.scan) == 0 {
-			// Nothing known to target yet.
-			kind, freqs = "full", nil
-		}
+	switch kind {
+	case "quick":
+		freqs = quick
+	case "known":
+		freqs = known
+	}
+	if kind != "full" && (len(a.scan) == 0 || len(freqs) == 0) {
+		kind, freqs = "full", nil // nothing known to target yet
 	}
 	a.setBusy(kind + " scan")
 	start := time.Now()
@@ -448,6 +470,7 @@ func (a *Agent) doScan(ctx context.Context, d Decision, link Link) {
 	act := Action{T: start, DecisionID: d.ID, Kind: "scan_" + kind,
 		Freqs: freqs, DurationMs: float64(dur.Microseconds()) / 1000}
 	if err == nil {
+		a.learnScanCost(freqs, dur)
 		var res []BSS
 		res, err = a.radio.ScanResults(ctx, a.ssid)
 		if err == nil {
@@ -466,7 +489,8 @@ func (a *Agent) doScan(ctx context.Context, d Decision, link Link) {
 	a.policy.Notify(PolicyEvent{Kind: "scan", At: time.Now(),
 		Success: act.Success, Message: kind})
 	if act.Success {
-		a.addRecent("%s scan found %d APs for this SSID", kind, act.Found)
+		a.addRecent("%s scan (%d channels, %d ms) found %d APs for this SSID",
+			kind, max(len(freqs), 0), dur.Milliseconds(), act.Found)
 	} else {
 		a.addRecent("%s scan failed", kind)
 	}
@@ -510,6 +534,10 @@ func (a *Agent) doRoam(ctx context.Context, d Decision, link Link) {
 	a.connChange = done
 	a.prevBSSID = d.Target
 	a.recordJoin(d.Target, done)
+	a.roamDurs = append(a.roamDurs, int(r.Duration.Milliseconds()))
+	if len(a.roamDurs) > 7 {
+		a.roamDurs = a.roamDurs[1:]
+	}
 	a.selfRoam = false
 	a.addRecent("roamed %s -> %s in %d ms", apID(link.BSSID),
 		apID(d.Target), r.Duration.Milliseconds())
