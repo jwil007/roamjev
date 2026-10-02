@@ -66,8 +66,8 @@ var briefing = map[string]any{
 		"Quick and known scans only re-measure known channels. " +
 			"Neighboring APs often use different channels on 5 and 6 GHz, " +
 			"so as the client moves, APs ahead on new channels are found " +
-			"only through the AP's neighbor report (which the known scan " +
-			"covers) or a full scan. 2.4 GHz reuses three channels, so its " +
+			"only through the AP's neighbor list (when it gives one; lists " +
+			"are often incomplete) or a full scan. 2.4 GHz reuses three channels, so its " +
 			"APs keep turning up in every scan.",
 		"Signal readings from a scan are snapshots; if the client is " +
 			"moving they drift within seconds. Waiting for perfectly fresh " +

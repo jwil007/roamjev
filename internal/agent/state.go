@@ -362,8 +362,12 @@ func (a *Agent) buildState(link Link, cands []Candidate, now time.Time) map[stri
 			band, ch := bandChannel(f)
 			nb = append(nb, fmt.Sprintf("%s ch %d", band, ch))
 		}
-		scan["neighbor_report"] = "the current AP lists neighbors on " +
-			strings.Join(nb, ", ") + " (a known scan covers these channels)"
+		scan["neighbor_report"] = "the current AP's neighbor list (may be " +
+			"incomplete) mentions " + strings.Join(nb, ", ") +
+			"; a known scan covers these channels"
+	} else if a.neighborsTried {
+		scan["neighbor_report"] = "the current AP gave no neighbor list; " +
+			"APs on channels not yet seen can only be found with a full scan"
 	}
 	if a.scanAt.IsZero() {
 		scan["status"] = "no scan has been run yet; nearby APs are unknown"

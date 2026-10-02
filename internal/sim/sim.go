@@ -553,10 +553,18 @@ func (w *World) Describe() string { return w.sc.describe }
 func (w *World) NeighborFreqs(_ context.Context) ([]int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.sc.nrCoverage == 0 {
+		return nil, fmt.Errorf("NEIGHBOR_REP_REQUEST: FAIL (AP may not support 802.11k)")
+	}
 	seen := map[int]bool{}
 	var out []int
 	for _, a := range w.aps {
 		if a == w.cur || math.Hypot(a.x-w.cur.x, a.y-w.cur.y) > 60 {
+			continue
+		}
+		// Incomplete lists: whether this AP lists that radio is fixed per
+		// pair (a stable, imperfect neighbor table, not a coin flip each time).
+		if pairHash(w.cur.bssid, a.bssid) >= w.sc.nrCoverage {
 			continue
 		}
 		if !seen[a.freq] {
@@ -566,4 +574,14 @@ func (w *World) NeighborFreqs(_ context.Context) ([]int, error) {
 	}
 	slices.Sort(out)
 	return out, nil
+}
+
+// pairHash maps a pair of BSSIDs to a stable value in [0, 1).
+func pairHash(a, b string) float64 {
+	var h uint64 = 1469598103934665603
+	for _, c := range a + "|" + b {
+		h ^= uint64(c)
+		h *= 1099511628211
+	}
+	return float64(h%10000) / 10000
 }

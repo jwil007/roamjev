@@ -103,18 +103,20 @@ func TestScanCost(t *testing.T) {
 }
 
 func TestNeighborReport(t *testing.T) {
-	w, _ := NewWorld(linkq.NewRing(time.Minute), 0, "hospital", 1)
-	f, err := w.NeighborFreqs(context.Background())
-	if err != nil || len(f) == 0 {
-		t.Fatalf("neighbors = %v, %v", f, err)
+	office, _ := NewWorld(linkq.NewRing(time.Minute), 0, "office", 1)
+	full, err := office.NeighborFreqs(context.Background())
+	if err != nil || len(full) == 0 {
+		t.Fatalf("office neighbors = %v, %v", full, err)
 	}
-	has5 := false
-	for _, x := range f {
-		if x > 5000 && x < 5900 {
-			has5 = true
-		}
+	hall, _ := NewWorld(linkq.NewRing(time.Minute), 0, "hallway", 1)
+	if f, err := hall.NeighborFreqs(context.Background()); err == nil {
+		t.Fatalf("hallway should not support 802.11k, got %v", f)
 	}
-	if !has5 {
-		t.Fatalf("no 5 GHz neighbor channels in %v", f)
+	// Partial lists are stable across requests.
+	hosp, _ := NewWorld(linkq.NewRing(time.Minute), 0, "hospital", 1)
+	a, _ := hosp.NeighborFreqs(context.Background())
+	b, _ := hosp.NeighborFreqs(context.Background())
+	if len(a) != len(b) {
+		t.Fatalf("partial neighbor list changed between requests: %v vs %v", a, b)
 	}
 }

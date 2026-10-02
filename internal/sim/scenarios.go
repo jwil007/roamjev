@@ -56,6 +56,10 @@ type scenario struct {
 	speed      float64 // m/s
 	pauseEvery float64 // mean seconds between unplanned stops while walking (0 = none)
 	traffic    []phase
+	// nrCoverage is how complete the APs' 802.11k neighbor reports are:
+	// 0 = not supported, 1 = every nearby AP listed. Vendor support is
+	// mixed, so most scenarios list only some neighbors.
+	nrCoverage float64
 }
 
 // Roam interruption by security type. FT (802.11r) skips the handshake;
@@ -100,6 +104,7 @@ var ScenarioNames = []string{"hallway", "boundary", "office", "convention", "hos
 func hallway() *scenario {
 	s := &scenario{
 		name:     "hallway",
+		nrCoverage: 0, // no 802.11k
 		describe: "80 m hallway, four dual-band APs plus a 2.4 GHz AP; one AP congests a minute out of every three; FT-PSK",
 		exponent: 3.0, shadow: 0.6,
 		security: "WPA2-PSK", ft: true, roamMs: roamFT,
@@ -128,6 +133,7 @@ func hallway() *scenario {
 func boundary() *scenario {
 	return &scenario{
 		name:     "boundary",
+		nrCoverage: 0,
 		describe: "standing still midway between two identical 5 GHz APs at about -76 dBm each; FT-PSK",
 		exponent: 3.0, shadow: 2.0,
 		security: "WPA2-PSK", ft: true, roamMs: roamFT,
@@ -147,6 +153,7 @@ func boundary() *scenario {
 func office() *scenario {
 	s := &scenario{
 		name:     "office",
+		nrCoverage: 1, // managed office network, complete lists
 		describe: "small office, six dual-band APs, lightly loaded (10-30%), FT-PSK; mostly at a desk with occasional walks",
 		exponent: 3.3, shadow: 0.8,
 		security: "WPA2-PSK", ft: true, roamMs: roamFT,
@@ -188,6 +195,7 @@ func office() *scenario {
 func convention() *scenario {
 	s := &scenario{
 		name:     "convention",
+		nrCoverage: 0.5,
 		describe: "convention hall, 24 APs, busy (55-80% base load) with moving crowd hotspots near 95%, WPA2-PSK without FT; slow walk with booth stops",
 		exponent: 2.7, shadow: 1.0,
 		security: "WPA2-PSK", ft: false, roamMs: roamPSK,
@@ -234,6 +242,7 @@ func convention() *scenario {
 func hospital() *scenario {
 	s := &scenario{
 		name:     "hospital",
+		nrCoverage: 0.6,
 		describe: "hospital corridor, APs every 30 m, moderate load (25-45%), 802.1X without FT (roams 0.35-1 s, sometimes 2+ s); nurse on a voice badge",
 		exponent: 3.4, shadow: 0.8,
 		security: "802.1X/EAP", ft: false, roamMs: roamEAP,

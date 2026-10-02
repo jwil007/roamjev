@@ -92,8 +92,9 @@ type Agent struct {
 	// (scans, roams). Link metrics shown to Jev skip them; grading doesn't.
 	offChan []linkq.Interval
 	// neighbors are channels from the current AP's 802.11k neighbor report.
-	neighbors  []int
-	lastFull   time.Time
+	neighbors      []int
+	neighborsTried bool
+	lastFull       time.Time
 	// Measured costs (decision loop only).
 	dwellActive, dwellPassive, fullScanMs float64
 	roamDurs                              []int
@@ -747,10 +748,12 @@ func (a *Agent) refreshNeighbors(ctx context.Context) {
 	if !ok {
 		return
 	}
+	a.neighborsTried = true
 	f, err := nr.NeighborFreqs(ctx)
 	if err != nil {
 		slog.Debug("neighbor report failed", "err", err)
+		a.neighbors = nil
 		return
 	}
-	a.neighbors = f
+	a.neighbors = f // a hint: vendor lists are often incomplete or empty
 }
