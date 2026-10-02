@@ -63,6 +63,12 @@ var briefing = map[string]any{
 			"link, a client should stay unless an alternative is " +
 			"substantially and lastingly better. Switching back and forth " +
 			"between options is churn, not improvement.",
+		"Quick and known scans only re-measure known channels. " +
+			"Neighboring APs often use different channels on 5 and 6 GHz, " +
+			"so as the client moves, APs ahead on new channels are found " +
+			"only through the AP's neighbor report (which the known scan " +
+			"covers) or a full scan. 2.4 GHz reuses three channels, so its " +
+			"APs keep turning up in every scan.",
 		"Signal readings from a scan are snapshots; if the client is " +
 			"moving they drift within seconds. Waiting for perfectly fresh " +
 			"readings while moving can mean never acting: a reading a few " +
@@ -216,13 +222,15 @@ func (a *Agent) securityWords(link Link) string {
 
 // scanScopes returns the channel list for each scan action.
 func (a *Agent) scanScopes(link Link, cands []Candidate) (quick, known []int) {
-	// The best candidate on each band first, then the next strongest, so a
-	// quick scan never refreshes only the band that happens to read loudest.
-	seen := map[int]bool{}
+	// The current channel first (so candidates can be compared with a
+	// same-moment reading of the current AP), then the best candidate on
+	// each band, then the next strongest.
+	quick = append(quick, link.Freq)
+	seen := map[int]bool{link.Freq: true}
 	bandDone := map[string]bool{}
-	for pass := 0; pass < 2 && len(quick) < 3; pass++ {
+	for pass := 0; pass < 2 && len(quick) < 4; pass++ {
 		for _, c := range cands { // strongest first
-			if c.Current || seen[c.Freq] || len(quick) >= 3 {
+			if c.Current || seen[c.Freq] || len(quick) >= 4 {
 				continue
 			}
 			if pass == 0 && bandDone[c.Band] {
@@ -236,6 +244,9 @@ func (a *Agent) scanScopes(link Link, cands []Candidate) (quick, known []int) {
 	all := map[int]bool{link.Freq: true}
 	for _, b := range a.scan {
 		all[b.Freq] = true
+	}
+	for _, f := range a.neighbors {
+		all[f] = true
 	}
 	for f := range all {
 		known = append(known, f)

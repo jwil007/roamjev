@@ -12,4 +12,5 @@ convention (dense, 55-95% load, PSK without FT), hospital (corridor,
 | cmp3 | v2: briefing, costs, environment, traffic; rail off | Jev wins voice (+0.17-0.25 MOS in 3 envs) and off-channel time (¼-½), loses throughput; drifts to 2.4 GHz |
 | cmp4 | v2 + pre-roam check | Neutral overall; failed roams 1.1 → 0.3 in hospital; 22% of checks found a 6+ dB change |
 | cmp5 | v3: objective metrics (no MOS/ratings), consistent rate estimates, band facts, noisier 2.4 GHz sim | Convention: voice +0.28, downloads tied, less 2.4 GHz than classic. Hallway: 5↔6 GHz flapping. Hospital: 2.4 GHz lock-in (candidate filter bias) |
-| cmp6 | v4: band-balanced candidates and quick scan, "no roaming on marginal differences" fact, shared shadowing for co-located radios | running |
+| cmp6 | v4: band-balanced candidates and quick scan, "no roaming on marginal differences" fact, shared shadowing for co-located radios | Convention: voice +0.29 (10/10), off-channel ¼, 0.6% on 2.4 GHz vs 11.8%. Hospital: voice +0.29 (10/10), worse roams 0.7 vs 2.0, but 68% on 2.4 GHz. Office: tie, 94% on 6 GHz. Hallway: ping-pong 2.1, 30 same-AP band flips |
+| cmp7 | v5: link metrics exclude our own off-channel time; candidates compared with the current AP's same-scan reading; 802.11k neighbor report channels in known scans (both arms); scan-coverage facts | running |

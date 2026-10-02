@@ -88,6 +88,12 @@ type Agent struct {
 	connChange time.Time
 	prevBSSID  string
 	visits     []visit
+	// offChan lists recent times the radio was off its home channel
+	// (scans, roams). Link metrics shown to Jev skip them; grading doesn't.
+	offChan []linkq.Interval
+	// neighbors are channels from the current AP's 802.11k neighbor report.
+	neighbors  []int
+	lastFull   time.Time
 	// Measured costs (decision loop only).
 	dwellActive, dwellPassive, fullScanMs float64
 	roamDurs                              []int
@@ -325,6 +331,7 @@ func (a *Agent) decide(ctx context.Context, trigger string,
 		a.prevBSSID = link.BSSID
 		a.selfRoam = false
 		a.recordJoin(link.BSSID, a.connChange)
+		a.refreshNeighbors(ctx)
 		a.policy.Notify(PolicyEvent{Kind: "conn_change", At: a.connChange,
 			Target: link.BSSID})
 	}
@@ -489,6 +496,7 @@ func (a *Agent) doScan(ctx context.Context, d Decision, link Link,
 	start := time.Now()
 	err := a.radio.Scan(ctx, freqs)
 	dur := time.Since(start)
+	a.markOffChannel(start, time.Now())
 	act := Action{T: start, DecisionID: d.ID, Kind: "scan_" + kind,
 		Freqs: freqs, DurationMs: float64(dur.Microseconds()) / 1000}
 	if err == nil {
@@ -498,6 +506,9 @@ func (a *Agent) doScan(ctx context.Context, d Decision, link Link,
 		if err == nil {
 			a.scan, a.scanAt, a.scanKind = res, time.Now(), kind
 			a.scanFetched = a.scanAt
+			if kind == "full" {
+				a.lastFull = a.scanAt
+			}
 			a.scanRSSI, a.scanBSSID = link.RSSI, link.BSSID
 			act.Found = len(res)
 			act.Success = true
@@ -528,6 +539,7 @@ func (a *Agent) doRoam(ctx context.Context, d Decision, link Link) {
 	a.selfRoam = true
 	r, err := a.radio.Roam(ctx, d.Target)
 	done := time.Now()
+	a.markOffChannel(start, done)
 	a.setBusy("")
 	a.lastRoam = done
 	act := Action{T: start, DecisionID: d.ID, Kind: "roam",
@@ -557,6 +569,7 @@ func (a *Agent) doRoam(ctx context.Context, d Decision, link Link) {
 	a.connChange = done
 	a.prevBSSID = d.Target
 	a.recordJoin(d.Target, done)
+	a.refreshNeighbors(ctx)
 	a.roamDurs = append(a.roamDurs, int(r.Duration.Milliseconds()))
 	if len(a.roamDurs) > 7 {
 		a.roamDurs = a.roamDurs[1:]
@@ -661,6 +674,7 @@ func (a *Agent) verifyTarget(ctx context.Context, d Decision, link Link) string 
 	start := time.Now()
 	err := a.radio.Scan(ctx, []int{freq})
 	dur := time.Since(start)
+	a.markOffChannel(start, time.Now())
 	act := Action{T: start, DecisionID: d.ID, Kind: "scan_verify",
 		Freqs: []int{freq}, Target: d.Target,
 		DurationMs: float64(dur.Microseconds()) / 1000}
@@ -712,4 +726,31 @@ func retrigger(again chan<- string, why string) {
 	case again <- why:
 	default:
 	}
+}
+
+// markOffChannel records a stretch when probes couldn't reach the gateway
+// because of our own scan or roam. The probe lands up to one probe interval
+// later, so pad the end a little.
+func (a *Agent) markOffChannel(from, to time.Time) {
+	a.offChan = append(a.offChan, linkq.Interval{From: from, To: to.Add(300 * time.Millisecond)})
+	cut := 0
+	for cut < len(a.offChan) && time.Since(a.offChan[cut].To) > 2*time.Minute {
+		cut++
+	}
+	a.offChan = a.offChan[cut:]
+}
+
+// refreshNeighbors asks the current AP for its neighbor report, if the
+// radio supports it.
+func (a *Agent) refreshNeighbors(ctx context.Context) {
+	nr, ok := a.radio.(NeighborReporter)
+	if !ok {
+		return
+	}
+	f, err := nr.NeighborFreqs(ctx)
+	if err != nil {
+		slog.Debug("neighbor report failed", "err", err)
+		return
+	}
+	a.neighbors = f
 }

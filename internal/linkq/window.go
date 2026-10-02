@@ -76,8 +76,18 @@ func (r *Ring) Last(d time.Duration) Window {
 	return r.Between(now.Add(-d), now)
 }
 
+// Interval is a time range to leave out of a window, e.g. while the radio
+// was off its home channel scanning: probes lost then say nothing about the
+// link itself.
+type Interval struct{ From, To time.Time }
+
 // Between summarizes samples with from <= At < to.
 func (r *Ring) Between(from, to time.Time) Window {
+	return r.BetweenExcluding(from, to, nil)
+}
+
+// BetweenExcluding is Between, skipping samples inside any of skip.
+func (r *Ring) BetweenExcluding(from, to time.Time, skip []Interval) Window {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	w := Window{From: from, To: to}
@@ -86,7 +96,7 @@ func (r *Ring) Between(from, to time.Time) Window {
 	var jn int
 	prev := -1.0
 	for _, s := range r.s {
-		if s.At.Before(from) || !s.At.Before(to) {
+		if s.At.Before(from) || !s.At.Before(to) || inAny(s.At, skip) {
 			continue
 		}
 		w.Sent++
@@ -149,4 +159,13 @@ func (r *Ring) Samples(since time.Time) []Sample {
 		}
 	}
 	return out
+}
+
+func inAny(t time.Time, skip []Interval) bool {
+	for _, iv := range skip {
+		if !t.Before(iv.From) && t.Before(iv.To) {
+			return true
+		}
+	}
+	return false
 }

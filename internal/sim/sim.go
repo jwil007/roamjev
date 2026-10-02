@@ -546,3 +546,24 @@ func (w *World) Position() string {
 
 // Describe summarizes the scenario.
 func (w *World) Describe() string { return w.sc.describe }
+
+// NeighborFreqs implements agent.NeighborReporter: the current AP's 802.11k
+// neighbor report lists the channels of APs within about 60 m of it (and
+// its own other radios), as an enterprise controller would.
+func (w *World) NeighborFreqs(_ context.Context) ([]int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	seen := map[int]bool{}
+	var out []int
+	for _, a := range w.aps {
+		if a == w.cur || math.Hypot(a.x-w.cur.x, a.y-w.cur.y) > 60 {
+			continue
+		}
+		if !seen[a.freq] {
+			seen[a.freq] = true
+			out = append(out, a.freq)
+		}
+	}
+	slices.Sort(out)
+	return out, nil
+}

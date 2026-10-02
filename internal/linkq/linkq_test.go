@@ -57,3 +57,20 @@ func TestReadTCPCounters(t *testing.T) {
 		t.Fatal("OutSegs is zero")
 	}
 }
+
+func TestBetweenExcluding(t *testing.T) {
+	r := NewRing(time.Minute)
+	t0 := time.Now().Add(-10 * time.Second)
+	for i := range 8 {
+		r.Add(Sample{At: t0.Add(time.Duration(i) * time.Second), RTT: time.Millisecond, Lost: i >= 4 && i < 6})
+	}
+	all := r.Between(t0, t0.Add(8*time.Second))
+	if all.Lost != 2 {
+		t.Fatalf("lost = %d", all.Lost)
+	}
+	ex := r.BetweenExcluding(t0, t0.Add(8*time.Second),
+		[]Interval{{t0.Add(4 * time.Second), t0.Add(6 * time.Second)}})
+	if ex.Lost != 0 || ex.Sent != 6 {
+		t.Fatalf("excluding scan: sent %d lost %d", ex.Sent, ex.Lost)
+	}
+}

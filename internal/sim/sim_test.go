@@ -1,6 +1,7 @@
 package sim
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -98,5 +99,22 @@ func TestScanCost(t *testing.T) {
 	}
 	if full < 2500 || full > 3500 {
 		t.Fatalf("full scan dwell %.0f ms", full)
+	}
+}
+
+func TestNeighborReport(t *testing.T) {
+	w, _ := NewWorld(linkq.NewRing(time.Minute), 0, "hospital", 1)
+	f, err := w.NeighborFreqs(context.Background())
+	if err != nil || len(f) == 0 {
+		t.Fatalf("neighbors = %v, %v", f, err)
+	}
+	has5 := false
+	for _, x := range f {
+		if x > 5000 && x < 5900 {
+			has5 = true
+		}
+	}
+	if !has5 {
+		t.Fatalf("no 5 GHz neighbor channels in %v", f)
 	}
 }

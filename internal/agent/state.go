@@ -30,6 +30,7 @@ type Candidate struct {
 	PHY       string  `json:"phy"`
 	RSSI      int     `json:"rssi_dbm"`
 	RSSIDelta int     `json:"rssi_vs_current_db"`
+	RefRSSI   int     `json:"-"` // current AP reading the delta is against
 	SNR       int     `json:"snr_db"`
 	UtilPct   int     `json:"channel_utilization_pct"`
 	Stations  int     `json:"stations"`
@@ -133,11 +134,27 @@ func (a *Agent) historyLine(bssid string, now time.Time, current bool) string {
 func (a *Agent) buildCandidates(link Link, now time.Time) []Candidate {
 	var out []Candidate
 	scanAge := now.Sub(a.scanFetched)
+	// Compare each candidate with the current AP's reading from the same
+	// scan when there is one: same moment, same measurement method. The
+	// live driver RSSI is a different measurement taken at a different time
+	// (and the client may have moved since the scan).
+	var curScan *BSS
+	for i := range a.scan {
+		if a.scan[i].BSSID == link.BSSID {
+			curScan = &a.scan[i]
+		}
+	}
+	ref := func(b BSS) int {
+		if curScan != nil && absDur(curScan.Age-b.Age) <= 2*time.Second {
+			return curScan.RSSI
+		}
+		return link.RSSI
+	}
 	for _, b := range a.scan {
 		c := Candidate{
 			ID: apID(b.BSSID), BSSID: b.BSSID, Band: b.Band,
 			Channel: b.Channel, Freq: b.Freq, Width: b.Width, PHY: b.PHY,
-			RSSI: b.RSSI, RSSIDelta: b.RSSI - link.RSSI, SNR: b.SNR,
+			RSSI: b.RSSI, RSSIDelta: b.RSSI - ref(b), RefRSSI: ref(b), SNR: b.SNR,
 			UtilPct: b.UtilPct, Stations: b.Stations,
 			EstMbps:  b.EstThroughputKbps / 1000,
 			SeenAgoS: int((scanAge + b.Age).Seconds()),
@@ -228,11 +245,14 @@ func (a *Agent) buildState(link Link, cands []Candidate, now time.Time) map[stri
 		}
 		return t
 	}
-	w10 := a.q.Between(since(10*time.Second), now)
-	w60 := a.q.Between(since(60*time.Second), now)
+	// Our own scans and roams take the radio off channel; probes lost
+	// then say nothing about the link, so leave those stretches out.
+	w10 := a.q.BetweenExcluding(since(10*time.Second), now, a.offChan)
+	w60 := a.q.BetweenExcluding(since(60*time.Second), now, a.offChan)
 	var prev10 linkq.Window
 	if !a.connChange.After(now.Add(-20 * time.Second)) {
-		prev10 = a.q.Between(now.Add(-20*time.Second), now.Add(-10*time.Second))
+		prev10 = a.q.BetweenExcluding(now.Add(-20*time.Second),
+			now.Add(-10*time.Second), a.offChan)
 	}
 
 	cur := map[string]any{"bssid": link.BSSID, "id": apID(link.BSSID),
@@ -303,7 +323,7 @@ func (a *Agent) buildState(link Link, cands []Candidate, now time.Time) map[stri
 			"est_mcs": estMCS(c.RSSI, c.Band, c.PHY),
 			"est_phy_mbps":           est,
 			"est_mbps_after_airtime_sharing": int(after),
-			"est_rate_vs_current":    ratio(after, a.curEstAfter(link, cur)),
+			"est_rate_vs_current":    ratio(after, a.curEstAfterAt(c.RefRSSI, link, cur)),
 			"measured_seconds_ago":   c.SeenAgoS,
 		}
 		if c.UtilPct >= 0 {
@@ -316,6 +336,35 @@ func (a *Agent) buildState(link Link, cands []Candidate, now time.Time) map[stri
 	}
 
 	scan := map[string]any{"aps_known": len(a.scan)}
+	if a.lastFull.IsZero() {
+		scan["last_full_scan"] = "none yet"
+	} else {
+		scan["last_full_scan"] = ago(now.Sub(a.lastFull))
+	}
+	if len(a.scan) > 0 {
+		bands := map[string]bool{}
+		for _, b := range a.scan {
+			if b.BSSID != link.BSSID {
+				bands[b.Band] = true
+			}
+		}
+		var have []string
+		for _, b := range []string{"2.4GHz", "5GHz", "6GHz"} {
+			if bands[b] {
+				have = append(have, b)
+			}
+		}
+		scan["bands_with_measured_candidates"] = strings.Join(have, ", ")
+	}
+	if len(a.neighbors) > 0 {
+		var nb []string
+		for _, f := range a.neighbors {
+			band, ch := bandChannel(f)
+			nb = append(nb, fmt.Sprintf("%s ch %d", band, ch))
+		}
+		scan["neighbor_report"] = "the current AP lists neighbors on " +
+			strings.Join(nb, ", ") + " (a known scan covers these channels)"
+	}
 	if a.scanAt.IsZero() {
 		scan["status"] = "no scan has been run yet; nearby APs are unknown"
 	} else {
@@ -480,16 +529,28 @@ func curUtil(cur map[string]any) int {
 // curEstAfter is the current AP's estimated rate after airtime sharing,
 // from the same estimator the candidates use.
 func (a *Agent) curEstAfter(link Link, cur map[string]any) float64 {
+	return a.curEstAfterAt(link.RSSI, link, cur)
+}
+
+// curEstAfterAt estimates the current AP's rate at a given RSSI reading.
+func (a *Agent) curEstAfterAt(rssi int, link Link, cur map[string]any) float64 {
 	band, _ := cur["band"].(string)
 	phy, _ := cur["phy"].(string)
 	if band == "" {
 		band, _ = bandChannel(link.Freq)
 	}
-	est := float64(estPHYMbps(link.RSSI, band, link.Width, phy))
+	est := float64(estPHYMbps(rssi, band, link.Width, phy))
 	if u := curUtil(cur); u > 0 {
 		est *= 1 - float64(u)/100
 	}
 	return est
+}
+
+func absDur(d time.Duration) time.Duration {
+	if d < 0 {
+		return -d
+	}
+	return d
 }
 
 // radioMap is how the radio link is actually performing (reported by the

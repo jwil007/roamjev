@@ -77,6 +77,14 @@ type Radio interface {
 	Counters() (rx, tx uint64, err error)
 }
 
+// NeighborReporter returns the channels of APs the current AP lists in
+// its 802.11k neighbor report. With it, a targeted scan can find APs on
+// channels the client hasn't seen yet, which otherwise needs a full scan
+// (5 and 6 GHz neighbors are usually on different channels).
+type NeighborReporter interface {
+	NeighborFreqs(ctx context.Context) ([]int, error)
+}
+
 // ActivityReporter is implemented by the simulator, which knows what the
 // client is doing (idle, call, download). Used only for grading: Jev sees
 // measured traffic rates, never this ground truth.
