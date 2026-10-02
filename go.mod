@@ -3,8 +3,6 @@ module github.com/jwil007/roamjev
 go 1.25.8
 
 require (
-	charm.land/bubbles/v2 v2.1.0
-	charm.land/bubbletea/v2 v2.0.2
 	charm.land/lipgloss/v2 v2.0.2
 	charm.land/log/v2 v2.0.0
 	github.com/BurntSushi/toml v1.6.0

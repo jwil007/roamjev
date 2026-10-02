@@ -1,11 +1,14 @@
 version: 2
 
+project_name: roamjev
+
 before:
   hooks:
     - go mod tidy
 
 builds:
   - id: roamjev
+    binary: roamjev
     main: ./cmd/roamjev
     env:
       - CGO_ENABLED=0
