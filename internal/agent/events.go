@@ -68,19 +68,38 @@ type Action struct {
 	Found      int       `json:"found,omitempty"`
 }
 
-// Outcome grades a roam by link quality before and after.
+// Outcome grades a roam.
+//
+// Pre/Post compare 15 s before with 3-18 s after. That is all a real radio
+// can measure, but it is optimistic: roams usually follow a dip, and MOS
+// tends to recover after a dip anyway. Baseline (15-75 s before) shows
+// whether the roam beat normal conditions or merely ended a dip.
+//
+// In the simulator, Stay is the link quality the client would have had over
+// the same window (roam start to 18 s after) had it not roamed, and the
+// verdict compares Actual against Stay instead.
 type Outcome struct {
-	T          time.Time    `json:"t"`
-	DecisionID int          `json:"decision_id"`
-	From       string       `json:"from"`
-	To         string       `json:"to"`
-	Pre        linkq.Window `json:"pre"`
-	Post       linkq.Window `json:"post"`
-	Disruption linkq.Window `json:"disruption"`
-	RSSIBefore int          `json:"rssi_before"`
-	RSSIAfter  int          `json:"rssi_after"`
-	MOSDelta   float64      `json:"mos_delta"`
-	Verdict    string       `json:"verdict"`
+	T          time.Time     `json:"t"`
+	DecisionID int           `json:"decision_id"`
+	From       string        `json:"from"`
+	To         string        `json:"to"`
+	Pre        linkq.Window  `json:"pre"`
+	Post       linkq.Window  `json:"post"`
+	Baseline   linkq.Window  `json:"baseline"`
+	Disruption linkq.Window  `json:"disruption"`
+	Actual     linkq.Window  `json:"actual"`
+	Stay       *linkq.Window `json:"stay,omitempty"`
+	RSSIBefore int           `json:"rssi_before"`
+	RSSIAfter  int           `json:"rssi_after"`
+	// MOSDelta is Post - Pre; GainVsStay is Actual - Stay (sim only).
+	MOSDelta   float64 `json:"mos_delta"`
+	GainVsStay float64 `json:"gain_vs_stay"`
+	// Verdict uses the best grade available ("vs stay" in the simulator).
+	// VerdictBA is always the before/after grade; it is what Jev is shown,
+	// because a real radio couldn't know the counterfactual.
+	Verdict   string `json:"verdict"`
+	VerdictBA string `json:"verdict_ba"`
+	Basis     string `json:"basis"`
 }
 
 // Note is a free-form event (external roam, disconnect, budget hit...).

@@ -384,7 +384,9 @@ function renderScore() {
   const scanSec = S.actions.filter((a) => a.kind.startsWith("scan")).reduce((s, a) => s + a.duration_ms / 1000, 0);
   const verdicts = { better: 0, "no change": 0, worse: 0, unmeasured: 0 };
   S.outcomes.forEach((o) => verdicts[o.verdict] = (verdicts[o.verdict] || 0) + 1);
-  const deltas = S.outcomes.filter((o) => o.verdict !== "unmeasured").map((o) => o.mos_delta);
+  // Prefer the counterfactual gain (sim) over the optimistic before/after delta.
+  const deltas = S.outcomes.filter((o) => o.verdict !== "unmeasured").map((o) => o.basis === "vs stay" ? o.gain_vs_stay : o.mos_delta);
+  const basis = S.outcomes.some((o) => o.basis === "vs stay") ? "vs staying" : "before/after (optimistic)";
   const avgDelta = deltas.length ? deltas.reduce((a, b) => a + b, 0) / deltas.length : null;
   const conn = S.ticks.filter((t) => t.connected && t.mos);
   const runSec = S.ticks.length ? (ts(S.ticks[S.ticks.length - 1].t) - ts(S.ticks[0].t)) : 0;
@@ -427,7 +429,7 @@ function renderScore() {
     ["Average MOS", f2(avgMos), `${pct(good)} of time ≥ 4.03 (good)`],
     ["Disconnected", pct(disc), `${ext} external roam(s)`],
     ["Roams", `${ok.length} / ${roams.length}`, `${roams.length - ok.length} failed · median ${median(ok.map((a) => a.duration_ms))?.toFixed(0) ?? "–"} ms`],
-    ["Roam outcomes", `${verdicts.better}↑ ${verdicts["no change"]}· ${verdicts.worse}↓`, `avg ΔMOS ${avgDelta == null ? "–" : (avgDelta > 0 ? "+" : "") + avgDelta.toFixed(2)}`],
+    ["Roam outcomes", `${verdicts.better}↑ ${verdicts["no change"]}· ${verdicts.worse}↓`, `avg ΔMOS ${avgDelta == null ? "–" : (avgDelta > 0 ? "+" : "") + avgDelta.toFixed(2)} · graded ${basis}`],
     ["Ping-pong", String(pingPongs), `quick returns with < 6 dB fade · ${justified} justified (AP faded first) · ${changes.length} AP changes`],
     ["Average stay", avgStay == null ? "–" : (avgStay < 90 ? Math.round(avgStay) + " s" : (avgStay / 60).toFixed(1) + " min"), `${runSec ? (changes.length / (runSec / 60)).toFixed(2) : "–"} roams/min`],
     ["Scans", `${scansT.length} tgt · ${scansF.length} full`, `${scanSec.toFixed(1)} s scanning (${runSec ? (100 * scanSec / runSec).toFixed(1) : "–"}% of run)`],
@@ -439,14 +441,18 @@ function renderScore() {
 
   const rows = S.outcomes.slice().reverse().map((o) => {
     const cls = o.verdict === "better" ? "v-better" : o.verdict === "worse" ? "v-worse" : "v-no";
+    const sg = (x) => (x > 0 ? "+" : "") + f2(x);
+    const vsStay = o.stay ? `${f2(o.actual.mos)} vs ${f2(o.stay.mos)} <b class="${cls}">${sg(o.gain_vs_stay)}</b>` : `<span class="muted">n/a (live)</span>`;
     return `<tr data-id="${o.decision_id}"><td>${fmtT(o.t)}</td><td class="mono">${apId(o.from)} → ${apId(o.to)}</td>
-      <td class="num">${f2(o.pre.mos)} → ${f2(o.post.mos)}</td><td class="num ${cls}">${o.mos_delta > 0 ? "+" : ""}${f2(o.mos_delta)}</td>
-      <td class="num">${f1(o.pre.loss_pct)} → ${f1(o.post.loss_pct)}%</td><td class="num">${o.rssi_before} → ${o.rssi_after}</td>
-      <td class="num">${o.disruption.lost}/${o.disruption.sent}</td><td class="${cls}">${esc(o.verdict)}</td></tr>`;
+      <td class="num">${o.baseline?.valid ? f2(o.baseline.mos) : "–"}</td>
+      <td class="num">${f2(o.pre.mos)} → ${f2(o.post.mos)} <span class="muted">${sg(o.mos_delta)}</span></td>
+      <td class="num">${vsStay}</td>
+      <td class="num">${o.rssi_before} → ${o.rssi_after}</td>
+      <td class="num">${o.disruption.lost}/${o.disruption.sent}</td><td class="${cls}" title="graded ${esc(o.basis || "before/after")}">${esc(o.verdict)}</td></tr>`;
   }).join("");
   const failed = S.actions.filter((a) => a.kind === "roam" && !a.success).reverse().map((a) =>
     `<tr data-id="${a.decision_id}"><td>${fmtT(a.t)}</td><td class="mono">${apId(a.from)} → ${apId(a.target)}</td><td colspan="5" class="muted">${esc(a.message)}</td><td class="v-worse">failed</td></tr>`).join("");
-  $("outcomes").innerHTML = `<thead><tr><th>time</th><th>roam</th><th>MOS</th><th>Δ</th><th>loss</th><th>RSSI</th><th>lost probes</th><th>verdict</th></tr></thead><tbody>${rows}${failed}</tbody>` +
+  $("outcomes").innerHTML = `<thead><tr><th>time</th><th>roam</th><th title="MOS 15–75 s before the roam">baseline</th><th title="15 s before → 3–18 s after (optimistic)">before → after</th><th title="simulator only: actual vs what staying would have measured, same window">vs staying</th><th>RSSI</th><th>lost probes</th><th>verdict</th></tr></thead><tbody>${rows}${failed}</tbody>` +
     (rows || failed ? "" : `<tbody><tr><td colspan="8" class="muted">No roams yet.</td></tr></tbody>`);
 }
 

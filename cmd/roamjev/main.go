@@ -235,8 +235,9 @@ func journalPath(dir, mode, iface string) (string, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", err
 	}
-	name := fmt.Sprintf("%s-%s-%s.jsonl", time.Now().Format("20060102-150405"),
-		strings.ReplaceAll(mode, "+", "-"), iface)
+	// PID in the name: concurrent runs (A/B tests) must never share a file.
+	name := fmt.Sprintf("%s-%s-%s-%d.jsonl", time.Now().Format("20060102-150405"),
+		strings.ReplaceAll(mode, "+", "-"), iface, os.Getpid())
 	return filepath.Join(dir, name), nil
 }
 

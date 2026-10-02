@@ -196,7 +196,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			}
 			m.lastOutcome = &o
 			a.addRecent("roam %s -> %s graded %s: MOS %.2f -> %.2f",
-				apID(o.From), apID(o.To), o.Verdict, o.Pre.MOS, o.Post.MOS)
+				apID(o.From), apID(o.To), o.VerdictBA, o.Pre.MOS, o.Post.MOS)
 		}
 	}
 }
@@ -467,6 +467,9 @@ func (a *Agent) doScan(ctx context.Context, d Decision, link Link) {
 func (a *Agent) doRoam(ctx context.Context, d Decision, link Link) {
 	a.setBusy("roaming")
 	start := time.Now()
+	// Joined-time of the AP we're leaving; the baseline must not reach back
+	// past it. (a.connChange is overwritten below on success.)
+	prevConn := a.connChange
 	a.selfRoam = true
 	r, err := a.radio.Roam(ctx, d.Target)
 	done := time.Now()
@@ -502,6 +505,11 @@ func (a *Agent) doRoam(ctx context.Context, d Decision, link Link) {
 		apID(d.Target), r.Duration.Milliseconds())
 	// Grade the roam once the post-roam window has filled.
 	pre := a.q.Between(start.Add(-15*time.Second), start)
+	baseFrom := start.Add(-75 * time.Second)
+	if prevConn.After(baseFrom) {
+		baseFrom = prevConn
+	}
+	baseline := a.q.Between(baseFrom, start.Add(-15*time.Second))
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -512,20 +520,24 @@ func (a *Agent) doRoam(ctx context.Context, d Decision, link Link) {
 		o := Outcome{T: time.Now(), DecisionID: d.ID, From: link.BSSID,
 			To: d.Target, Pre: pre, Post: post,
 			Disruption: a.q.Between(start, done.Add(3*time.Second)),
+			Baseline:   baseline,
+			Actual:     a.q.Between(start, done.Add(18*time.Second)),
 			RSSIBefore: link.RSSI}
 		a.mu.Lock()
 		o.RSSIAfter = a.link.RSSI
 		a.mu.Unlock()
 		o.MOSDelta = post.MOS - pre.MOS
-		switch {
-		case !pre.Valid || !post.Valid:
-			o.Verdict = "unmeasured"
-		case o.MOSDelta > 0.1:
-			o.Verdict = "better"
-		case o.MOSDelta < -0.1:
-			o.Verdict = "worse"
-		default:
-			o.Verdict = "no change"
+		o.VerdictBA = grade(o.MOSDelta, pre.Valid && post.Valid)
+		o.Verdict, o.Basis = o.VerdictBA, "before/after"
+		if cf, ok := a.radio.(Counterfactual); ok {
+			// Same window as Actual, so the roam's own disruption counts.
+			if stay, ok := cf.StayQuality(link.BSSID, start,
+				done.Add(18*time.Second)); ok {
+				o.Stay = &stay
+				o.GainVsStay = o.Actual.MOS - stay.MOS
+				o.Verdict = grade(o.GainVsStay, o.Actual.Valid)
+				o.Basis = "vs stay"
+			}
 		}
 		a.store.AddOutcome(o)
 		select {
@@ -533,4 +545,16 @@ func (a *Agent) doRoam(ctx context.Context, d Decision, link Link) {
 		case <-ctx.Done():
 		}
 	}()
+}
+
+func grade(delta float64, valid bool) string {
+	switch {
+	case !valid:
+		return "unmeasured"
+	case delta > 0.1:
+		return "better"
+	case delta < -0.1:
+		return "worse"
+	}
+	return "no change"
 }

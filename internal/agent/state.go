@@ -105,7 +105,7 @@ func (a *Agent) memoryLine(bssid string, now time.Time) string {
 		o := m.lastOutcome
 		parts = append(parts, fmt.Sprintf(
 			"last roam here %s: MOS %.2f -> %.2f (%s)",
-			ago(now.Sub(o.T)), o.Pre.MOS, o.Post.MOS, o.Verdict))
+			ago(now.Sub(o.T)), o.Pre.MOS, o.Post.MOS, o.VerdictBA))
 	}
 	if m.failures > 0 {
 		parts = append(parts, fmt.Sprintf(

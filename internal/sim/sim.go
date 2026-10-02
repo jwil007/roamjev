@@ -58,6 +58,9 @@ type World struct {
 	down     bool
 	tcpOut   uint64
 	tcpRetx  uint64
+	// cf holds, per AP, the probes the client would have measured had it
+	// stayed associated there: the counterfactual a roam is graded against.
+	cf map[string]*linkq.Ring
 }
 
 func NewWorld(ring *linkq.Ring, speed float64, scenario string) (*World, error) {
@@ -120,6 +123,7 @@ func (w *World) Run(ctx context.Context) {
 		case now := <-t.C:
 			w.mu.Lock()
 			w.advance(now, step.Seconds())
+			w.probeCounterfactuals(now)
 			s, out, retx := w.probe(now)
 			w.tcpOut += out
 			w.tcpRetx += retx
@@ -176,15 +180,48 @@ func (w *World) advance(now time.Time, dt float64) {
 }
 
 func (w *World) probe(now time.Time) (linkq.Sample, uint64, uint64) {
-	s := linkq.Sample{At: now}
 	if w.down || w.busy == "roam" {
-		s.Lost = true
-		return s, 0, 0
+		return linkq.Sample{At: now, Lost: true}, 0, 0
 	}
-	snr := w.rssiOf(w.cur) + rand.NormFloat64()*1.5 - noiseFloor
-	util := w.cur.util
+	return w.probeAP(now, w.cur, w.busy == "scan")
+}
+
+// probeCounterfactuals samples every AP as if the client were associated to
+// it and not scanning. Below the sensitivity floor it would have dropped.
+func (w *World) probeCounterfactuals(now time.Time) {
+	if w.cf == nil {
+		w.cf = map[string]*linkq.Ring{}
+		for _, a := range w.aps {
+			w.cf[a.bssid] = linkq.NewRing(5 * time.Minute)
+		}
+	}
+	for _, a := range w.aps {
+		s := linkq.Sample{At: now, Lost: true}
+		if w.rssiOf(a) >= -88 {
+			s, _, _ = w.probeAP(now, a, false)
+		}
+		w.cf[a.bssid].Add(s)
+	}
+}
+
+// StayQuality implements agent.Counterfactual.
+func (w *World) StayQuality(bssid string, from, to time.Time) (linkq.Window, bool) {
+	w.mu.Lock()
+	r := w.cf[bssid]
+	w.mu.Unlock()
+	if r == nil {
+		return linkq.Window{}, false
+	}
+	win := r.Between(from, to)
+	return win, win.Valid
+}
+
+func (w *World) probeAP(now time.Time, a *ap, scanning bool) (linkq.Sample, uint64, uint64) {
+	s := linkq.Sample{At: now}
+	snr := w.rssiOf(a) + rand.NormFloat64()*1.5 - noiseFloor
+	util := a.util
 	pLoss := 0.5/(1+math.Exp((snr-12)/2.2)) + math.Max(0, util-60)/40*0.08
-	if w.busy == "scan" {
+	if scanning {
 		pLoss += 0.45
 	}
 	lat := 1.5 + math.Max(0, 25-snr)*0.8 + math.Max(0, util-40)*0.25

@@ -104,8 +104,22 @@ facts so the two can be compared.
   with traffic, so it's shown with the segment count.
 - L2 retry counters aren't used; most drivers don't report them reliably.
 
-Each roam is graded: MOS for 15 s before vs 3–18 s after (`better` if Δ > +0.1,
-`worse` if Δ < −0.1). Probes lost during the roam are recorded as disruption.
+Each roam is graded three ways:
+
+- **Before/after:** MOS 15 s before vs 3–18 s after. It's all a real radio
+  can measure, but it is optimistic: roams usually follow a dip, and MOS tends
+  to recover after a dip anyway (regression to the mean), so almost every
+  roam looks "better".
+- **Baseline:** MOS 15–75 s before the roam, so you can see whether the roam
+  beat normal conditions or merely ended a dip.
+- **Vs staying (simulator only):** the simulator keeps generating probes for
+  every AP as if the client were still associated there, so a roam is graded
+  on actual MOS vs what staying would have given over the same window
+  (including the roam's own disruption). This is the verdict the simulator's
+  scorecard uses. Jev itself is only ever shown the before/after grade, since
+  a real radio couldn't know the counterfactual.
+
+`better` / `worse` means a difference above +0.1 / below −0.1 MOS.
 
 ## Dashboard
 

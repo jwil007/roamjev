@@ -24,7 +24,9 @@ type Summary struct {
 	Better        int
 	NoChange      int
 	Worse         int
-	AvgMOSDelta   float64
+	AvgMOSDelta   float64 // before/after (optimistic)
+	AvgGainVsStay float64 // simulator only
+	StayGraded    int
 	ScansTargeted int
 	ScansFull     int
 	ScanTime      time.Duration
@@ -139,9 +141,16 @@ func Summarize(s *Store) Summary {
 			dsum += o.MOSDelta
 			dn++
 		}
+		if o.Stay != nil {
+			sum.AvgGainVsStay += o.GainVsStay
+			sum.StayGraded++
+		}
 	}
 	if dn > 0 {
 		sum.AvgMOSDelta = dsum / float64(dn)
+	}
+	if sum.StayGraded > 0 {
+		sum.AvgGainVsStay /= float64(sum.StayGraded)
 	}
 	var lats []float64
 	var slR, slN float64
@@ -187,7 +196,11 @@ func (s Summary) Print(w io.Writer, name string) {
 	p("average MOS", "%.2f  (%.0f%% of time good, %.1f%% disconnected)", s.AvgMOS, s.PctGood, s.PctDown)
 	p("AP changes", "%d  (ping-pongs: %d, justified quick returns: %d, average stay %s)", s.APChanges, s.PingPongs, s.Justified, s.AvgStay.Round(time.Second))
 	p("roams", "%d ok, %d failed", s.RoamsOK, s.RoamsFailed)
-	p("outcomes", "%d better, %d no change, %d worse (avg ΔMOS %+.2f)", s.Better, s.NoChange, s.Worse, s.AvgMOSDelta)
+	basis := "before/after"
+	if s.StayGraded > 0 {
+		basis = fmt.Sprintf("vs staying; avg gain %+.2f", s.AvgGainVsStay)
+	}
+	p("outcomes", "%d better, %d no change, %d worse (%s; before/after avg %+.2f)", s.Better, s.NoChange, s.Worse, basis, s.AvgMOSDelta)
 	p("scans", "%d targeted, %d full (%s scanning)", s.ScansTargeted, s.ScansFull, s.ScanTime.Round(100*time.Millisecond))
 	p("Jev calls", "%d  (%d errors, %d blocked by rails, median %.0f ms, $%.4f)", s.Calls, s.Errors, s.Blocked, s.MedianLatency, s.CostUSD)
 	p("short-lived? (noul)", "%.2f when choosing roam, %.2f otherwise", s.ShortLivedWhenRoam, s.ShortLivedWhenNot)

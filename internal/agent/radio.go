@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"time"
+
+	"github.com/jwil007/roamjev/internal/linkq"
 )
 
 // Link is the current association as seen by the driver.
@@ -58,4 +60,12 @@ type Radio interface {
 	// Prepare stops wpa_supplicant roaming on its own; the returned func
 	// restores the original settings.
 	Prepare() (restore func(), err error)
+}
+
+// Counterfactual is implemented by radios (the simulator) that know what
+// link quality the client would have measured had it stayed on an AP. It
+// lets roams be graded against staying instead of against the pre-roam dip,
+// which flatters almost every roam (regression to the mean).
+type Counterfactual interface {
+	StayQuality(bssid string, from, to time.Time) (linkq.Window, bool)
 }
