@@ -22,8 +22,10 @@ const f1 = (x) => (x == null || isNaN(x)) ? "–" : (+x).toFixed(1);
 const f2 = (x) => (x == null || isNaN(x)) ? "–" : (+x).toFixed(2);
 const pct = (x) => (x == null || isNaN(x)) ? "–" : Math.round(x * 100) + "%";
 
-const ACTIONS = ["stay", "scan_targeted", "scan_full", "roam"];
-const ACTION_COLOR = { stay: "--stay", scan_targeted: "--scan-t", scan_full: "--scan-f", roam: "--roam" };
+const ACTIONS = ["stay", "scan_quick", "scan_known", "scan_full", "roam"];
+const ACTION_COLOR = { stay: "--stay", scan_quick: "--scan-q", scan_known: "--scan-t", scan_targeted: "--scan-t", scan_full: "--scan-f", roam: "--roam" };
+// Older journals used scan_targeted for what is now scan_known.
+const probOf = (probs, a) => probs?.[a] ?? (a === "scan_known" ? probs?.scan_targeted : undefined);
 const NOULS = [
   ["link_degraded", "link degraded?", "--n-deg"],
   ["better_ap_available", "better AP available?", "--n-better"],
@@ -112,6 +114,8 @@ function renderTiles() {
     ["Jitter", f1(t.jitter_ms) + " ms", "mean |Δ RTT|"],
     ["RSSI", t.connected ? t.rssi + " dBm" : "–", apId(t.bssid)],
     ["MCS tx / rx", `${t.tx_mcs} / ${t.rx_mcs}`, `${Math.round(t.tx_mbps)} / ${Math.round(t.rx_mbps)} Mb/s`],
+    ["Effective rate", t.eff_mbps ? Math.round(t.eff_mbps) + " Mb/s" : "–", t.util_pct ? `PHY × ${100 - t.util_pct}% free airtime` : "PHY rate (load unknown)"],
+    ["Traffic", t.traffic_kbps == null ? "–" : (t.traffic_kbps >= 1000 ? (t.traffic_kbps / 1000).toFixed(1) + " Mb/s" : Math.round(t.traffic_kbps) + " kb/s"), t.activity ? "sim: " + t.activity : "interface rate"],
     ["TCP retrans", t.tcp_out_segs >= 200 ? f1(t.tcp_retrans_pct) + "%" : "–", t.tcp_out_segs + " segs / 10 s"],
   ];
   $("tiles").innerHTML = tiles.map(([k, v, s, cls]) =>
@@ -238,9 +242,9 @@ function buildCharts() {
   const mopts = baseOpts(170, stackSeries.concat(noulSeries), [
     axis(null, { scale: "p", size: 40, values: (u, vs) => vs.map((v) => Math.round(v * 100) + "%") }),
   ], { p: { range: [0, 1] } });
-  mopts.bands = [2, 3, 4].map((i) => ({ series: [i, i - 1], fill: css(ACTION_COLOR[ACTIONS[i - 1]]) + "aa" }));
+  mopts.bands = [2, 3, 4, 5].map((i) => ({ series: [i, i - 1], fill: css(ACTION_COLOR[ACTIONS[i - 1]]) + "aa" }));
   mopts.series[1].fill = css(ACTION_COLOR.stay) + "aa";
-  const cm = new uPlot(mopts, [[], [], [], [], [], [], [], []], $("c-m"));
+  const cm = new uPlot(mopts, [[], ...ACTIONS.map(() => []), ...NOULS.map(() => [])], $("c-m"));
   charts = [cq, cs, cl, cm];
 }
 
@@ -265,7 +269,7 @@ function renderCharts() {
 
   const ds = S.decisions.filter((d) => ts(d.t) >= xmin - 10);
   const mx = ds.map((d) => ts(d.t));
-  mindRaw = ACTIONS.map((a) => ds.map((d) => d.answers?.action?.probabilities?.[a] ?? null));
+  mindRaw = ACTIONS.map((a) => ds.map((d) => d.answers ? (probOf(d.answers.action?.probabilities, a) ?? 0) : null));
   const cum = [];
   let acc = ds.map(() => 0);
   for (let i = 0; i < ACTIONS.length; i++) {
@@ -337,7 +341,7 @@ function renderInspector() {
     </div>
     ${d.blocked ? `<div class="blocked">Rail: ${esc(d.blocked)}</div>` : ""}
     ${d.state?.roaming?.pattern ? `<div class="pp">⇄ Pattern stated to Jev: ${esc(d.state.roaming.pattern)}</div>` : ""}
-    <div><div class="sub">Action</div>${bars(A.action?.probabilities, ACTIONS, (k) => css(ACTION_COLOR[k]), d.chosen)}</div>
+    <div><div class="sub">Action</div>${bars(Object.fromEntries(ACTIONS.map((k) => [k, probOf(A.action?.probabilities, k) ?? 0])), ACTIONS, (k) => css(ACTION_COLOR[k]), d.chosen)}</div>
     <div><div class="sub">Target AP <span class="muted small" style="text-transform:none">(confidence ${f2(A.target?.confidence)})</span></div>
       ${bars(Object.fromEntries(tOrder.map((k) => [tgtNames[k] || k, tProbs[k]])), tOrder.map((k) => tgtNames[k] || k), () => css("--roam"), tgtNames[A.target?.choice] || A.target?.choice)}</div>
     <div><div class="sub">Diagnostics</div><div class="meters">
@@ -390,7 +394,7 @@ function p95(xs) { if (!xs.length) return null; const s = xs.slice().sort((a, b)
 function renderScore() {
   const roams = S.actions.filter((a) => a.kind === "roam");
   const ok = roams.filter((a) => a.success);
-  const scansT = S.actions.filter((a) => a.kind === "scan_targeted");
+  const scansT = S.actions.filter((a) => a.kind === "scan_targeted" || a.kind === "scan_known" || a.kind === "scan_quick");
   const scansF = S.actions.filter((a) => a.kind === "scan_full");
   const scanSec = S.actions.filter((a) => a.kind.startsWith("scan")).reduce((s, a) => s + a.duration_ms / 1000, 0);
   const verdicts = { better: 0, "no change": 0, worse: 0, unmeasured: 0 };

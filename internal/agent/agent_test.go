@@ -31,6 +31,7 @@ func TestRailCheck(t *testing.T) {
 	}
 	for _, c := range cases {
 		cfg := DefaultConfig()
+		cfg.RoamMinConfidence = 0.5 // exercise the rail even though it's off by default
 		cfg.Observe = c.observe
 		a := &Agent{cfg: cfg, lastRoam: c.lastRoam, scanAt: c.lastScan}
 		exec, blocked := a.railCheck(c.d, link, now)

@@ -44,7 +44,11 @@ func DefaultConfig() Config {
 		Interval:          3 * time.Second,
 		JevTimeout:        1500 * time.Millisecond,
 		MaxCandidates:     6,
-		RoamMinConfidence: 0.5,
+		// 0: act on Jev's top choice. Confidence measures how concentrated
+		// the whole distribution is, so with five actions a clear 55%
+		// "roam" scores ~0.3-0.45; a 0.5 rail blocked ~80% of Jev's roam
+		// choices in the office and convention simulations.
+		RoamMinConfidence: 0,
 		MinRoamGap:        5 * time.Second,
 		MinScanGap:        4 * time.Second,
 		BudgetUSD:         2,

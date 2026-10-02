@@ -9,6 +9,7 @@
   --accent: #3b6fd8;
 
   --stay: #8a94a6;
+  --scan-q: #7cc4e4;
   --scan-t: #38a3d6;
   --scan-f: #6b5bd6;
   --roam: #e08a1e;
@@ -123,7 +124,7 @@ main { padding: 16px; max-width: 1500px; margin: 0 auto; display: flex; flex-dir
 .insp-meta b { color: var(--text); font-family: var(--mono); font-weight: 600; }
 .verdict { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; }
 .pill { font: 600 12px var(--mono); padding: 2px 8px; border-radius: 6px; color: #fff; }
-.pill.stay { background: var(--stay); } .pill.scan_targeted { background: var(--scan-t); }
+.pill.stay { background: var(--stay); } .pill.scan_targeted, .pill.scan_known { background: var(--scan-t); } .pill.scan_quick { background: var(--scan-q); color: #10202a; }
 .pill.scan_full { background: var(--scan-f); } .pill.roam { background: var(--roam); }
 .pill.err { background: var(--bad); }
 .blocked { color: var(--poor); font-size: 12px; }

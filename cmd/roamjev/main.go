@@ -53,7 +53,7 @@ func run() error {
 	journalDir := flag.String("journal-dir", "", "where run journals go (default /var/lib/roamjev as root, else ~/.local/state/roamjev)")
 	interval := flag.Duration("interval", def.Interval, "time between decisions")
 	jevTimeout := flag.Duration("jev-timeout", def.JevTimeout, "per-call timeout")
-	minConf := flag.Float64("min-confidence", def.RoamMinConfidence, "roam only when Jev's action confidence is at least this")
+	minConf := flag.Float64("min-confidence", def.RoamMinConfidence, "roam only when Jev's action confidence is at least this (0 = act on Jev's top choice)")
 	budget := flag.Float64("budget", def.BudgetUSD, "pause Jev calls after this many USD in one run (0 = no limit)")
 	maxCands := flag.Int("candidates", def.MaxCandidates, "candidate APs shown to Jev")
 	observe := flag.Bool("observe", false, "ask Jev but never act (wpa_supplicant keeps roaming normally)")
