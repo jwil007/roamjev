@@ -50,6 +50,9 @@ func (c *Client) NeighborReportRaw(ctx context.Context, wait time.Duration) ([]i
 		case <-quiet.C:
 			return freqs, raw, nil // the burst of reports is over
 		case ev := <-events:
+			if strings.TrimSpace(ev) == "OK" {
+				continue // wpa_supplicant's reply to ATTACH, not an event
+			}
 			raw = append(raw, strings.TrimSpace(ev))
 			// wpa_supplicant's name is RRM-NEIGHBOR-REP-REQUEST-FAILED; accept
 			// the shorter form too.
