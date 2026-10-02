@@ -228,24 +228,20 @@ func (a *Agent) securityWords(link Link) string {
 
 // scanScopes returns the channel list for each scan action.
 func (a *Agent) scanScopes(link Link, cands []Candidate) (quick, known []int) {
-	// Two channels: the best candidate on each band first, then the next
-	// strongest. Kept to two so a quick scan stays short enough (~70 ms) to
-	// be inaudible on a call; candidates from it are compared with the
-	// driver's reading of the current AP taken at scan time.
-	seen := map[int]bool{link.Freq: true}
-	bandDone := map[string]bool{}
-	for pass := 0; pass < 2 && len(quick) < 2; pass++ {
-		for _, c := range cands { // strongest first
-			if c.Current || seen[c.Freq] || len(quick) >= 2 {
-				continue
-			}
-			if pass == 0 && bandDone[c.Band] {
-				continue
-			}
-			seen[c.Freq] = true
-			bandDone[c.Band] = true
+	// Two channels: the strongest candidate's, plus the known channel that
+	// has gone longest without being measured. Repeated quick scans thus
+	// rotate through every known channel, keeping far-off APs (often the
+	// ones the client is walking toward) fresh, while each scan stays short
+	// enough (~70 ms) to be inaudible on a call. This picks channels only;
+	// whether to scan is Jev's call.
+	for _, c := range cands { // strongest first
+		if !c.Current && c.Freq != link.Freq {
 			quick = append(quick, c.Freq)
+			break
 		}
+	}
+	if f, ok := a.stalestChannel(link.Freq, quick); ok {
+		quick = append(quick, f)
 	}
 	all := map[int]bool{link.Freq: true}
 	for _, b := range a.scan {
@@ -356,7 +352,8 @@ func (a *Agent) costs(link Link, cands []Candidate) map[string]any {
 	}
 	return map[string]any{
 		"scan_quick": a.scanCostWords(quick) + "; refreshes the strongest " +
-			"few candidates only",
+			"candidate plus the known channel measured longest ago, so " +
+			"repeated quick scans rotate through all known APs",
 		"scan_known": a.scanCostWords(known) + "; refreshes every known AP",
 		"scan_full":  full + "; also finds APs not seen before",
 		"roam":       roam,
@@ -447,5 +444,44 @@ func trafficClass(kbps float64) string {
 		return "light steady traffic (calls, video conferencing)"
 	default:
 		return "heavy traffic (downloads, uploads)"
+	}
+}
+
+// stalestChannel returns the known channel (from scans and the neighbor
+// list) measured least recently, skipping the home channel and skip.
+func (a *Agent) stalestChannel(home int, skip []int) (int, bool) {
+	known := map[int]bool{}
+	for _, b := range a.scan {
+		known[b.Freq] = true
+	}
+	for _, f := range a.neighbors {
+		known[f] = true
+	}
+	best, found := 0, false
+	var oldest time.Time
+	for f := range known {
+		if f == home || slices.Contains(skip, f) {
+			continue
+		}
+		t := a.chanScanned[f] // zero if never measured: stalest of all
+		if !found || t.Before(oldest) || (t.Equal(oldest) && f < best) {
+			best, oldest, found = f, t, true
+		}
+	}
+	return best, found
+}
+
+// markScanned records when each channel was last measured.
+func (a *Agent) markScanned(freqs []int, res []BSS, at time.Time) {
+	if a.chanScanned == nil {
+		a.chanScanned = map[int]time.Time{}
+	}
+	for _, f := range freqs {
+		a.chanScanned[f] = at
+	}
+	if freqs == nil { // full scan: every channel any result came from
+		for _, b := range res {
+			a.chanScanned[b.Freq] = at
+		}
 	}
 }

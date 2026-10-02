@@ -94,6 +94,7 @@ type Agent struct {
 	// neighbors are channels from the current AP's 802.11k neighbor report.
 	neighbors      []int
 	neighborsTried bool
+	chanScanned    map[int]time.Time // last time each channel was measured
 	lastFull       time.Time
 	// Measured costs (decision loop only).
 	dwellActive, dwellPassive, fullScanMs float64
@@ -505,6 +506,7 @@ func (a *Agent) doScan(ctx context.Context, d Decision, link Link,
 		var res []BSS
 		res, err = a.radio.ScanResults(ctx, a.ssid)
 		if err == nil {
+			a.markScanned(freqs, res, time.Now())
 			a.scan, a.scanAt, a.scanKind = res, time.Now(), kind
 			a.scanFetched = a.scanAt
 			if kind == "full" {
@@ -690,6 +692,7 @@ func (a *Agent) verifyTarget(ctx context.Context, d Decision, link Link) string 
 		return "" // couldn't check; don't block the decision on it
 	}
 	a.learnScanCost([]int{freq}, dur)
+	a.markScanned([]int{freq}, nil, time.Now())
 	act.Success = true
 	a.scan, a.scanFetched = res, time.Now()
 	now := -999
