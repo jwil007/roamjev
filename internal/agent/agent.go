@@ -110,7 +110,6 @@ type Agent struct {
 	lastFullSet    map[string]bool       // BSSIDs found by the last full scan
 	lastFull       time.Time
 	// Measured costs (decision loop only).
-	dwellActive, dwellPassive, fullScanMs float64
 	roamDurs                              []int
 	mem        map[string]*bssMemory
 	recent     []string
@@ -538,13 +537,16 @@ func (a *Agent) doScan(ctx context.Context, d Decision, link Link,
 	err := a.radio.Scan(ctx, freqs)
 	dur := time.Since(start)
 	if err == nil {
-		a.measureScanImpact(kind, start, time.Now())
+		n := len(freqs)
+		if freqs == nil {
+			n = 0 // full scan: channel count unknown on a real radio
+		}
+		a.measureScanImpact(kind, n, start, time.Now())
 	}
 	a.markOffChannel(start, time.Now())
 	act := Action{T: start, DecisionID: d.ID, Kind: "scan_" + kind,
 		Freqs: freqs, DurationMs: float64(dur.Microseconds()) / 1000}
 	if err == nil {
-		a.learnScanCost(freqs, dur)
 		var res []BSS
 		res, err = a.radio.ScanResults(ctx, a.ssid)
 		if err == nil {
@@ -737,7 +739,6 @@ func (a *Agent) verifyTarget(ctx context.Context, d Decision, link Link) string 
 		a.store.AddAction(act)
 		return "" // couldn't check; don't block the decision on it
 	}
-	a.learnScanCost([]int{freq}, dur)
 	a.markScanned([]int{freq}, nil, time.Now())
 	act.Success = true
 	a.scan, a.scanFetched = res, time.Now()
@@ -817,7 +818,9 @@ func (a *Agent) notify(ev PolicyEvent) {
 
 // safetyNet returns a reason to override Jev with a full scan, or "".
 func (a *Agent) safetyNet(d Decision, link Link, cands []Candidate, now time.Time) string {
-	if !a.cfg.SafetyNet || a.cfg.Observe || strings.Contains(d.Policy, "fallback") {
+	// Only for Jev's own decisions: the classic policy has its own scan
+	// logic and runs exactly as roamctl does, and the fallback is classic.
+	if !a.cfg.SafetyNet || a.cfg.Observe || d.Policy != "jev" {
 		return ""
 	}
 	if d.Executed == "scan_full" || d.Executed == "roam" {

@@ -27,6 +27,7 @@ type Window struct {
 	Lost       int     `json:"lost"`
 	LossPct    float64 `json:"loss_pct"`
 	LatencyMs  float64 `json:"latency_ms"`
+	MaxMs      float64 `json:"max_latency_ms"` // slowest probe that got a reply
 	JitterMs   float64 `json:"jitter_ms"`
 	MOS        float64 `json:"mos"`
 	RFactor    float64 `json:"r_factor"`
@@ -106,6 +107,9 @@ func (r *Ring) BetweenExcluding(from, to time.Time, skip []Interval) Window {
 		}
 		ms := float64(s.RTT.Microseconds()) / 1000
 		sum += ms
+		if ms > w.MaxMs {
+			w.MaxMs = ms
+		}
 		if prev >= 0 {
 			jsum += math.Abs(ms - prev)
 			jn++

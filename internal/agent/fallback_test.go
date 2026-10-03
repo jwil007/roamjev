@@ -68,7 +68,10 @@ func TestSafetyNet(t *testing.T) {
 	now := time.Now()
 	weak := Link{BSSID: "aa:00", RSSI: -80}
 	healthy := Link{BSSID: "aa:00", RSSI: -60}
-	stay := Decision{Chosen: "stay", Executed: "stay"}
+	stay := Decision{Policy: "jev", Chosen: "stay", Executed: "stay"}
+	if why := a.safetyNet(Decision{Policy: "classic", Chosen: "stay", Executed: "stay"}, Link{BSSID: "aa:00", RSSI: -80}, nil, now); why != "" {
+		t.Fatalf("safety net must not apply to the classic policy: %q", why)
+	}
 	if why := a.safetyNet(stay, weak, nil, now); !strings.HasPrefix(why, "safety net") {
 		t.Fatalf("weak link, nothing better known: want a full scan, got %q", why)
 	}
@@ -79,7 +82,7 @@ func TestSafetyNet(t *testing.T) {
 	if why := a.safetyNet(stay, weak, better, now); why != "" {
 		t.Fatalf("a fresh stronger candidate is known: got %q", why)
 	}
-	if why := a.safetyNet(Decision{Chosen: "roam", Executed: "roam"}, weak, nil, now); why != "" {
+	if why := a.safetyNet(Decision{Policy: "jev", Chosen: "roam", Executed: "roam"}, weak, nil, now); why != "" {
 		t.Fatalf("Jev already roaming: got %q", why)
 	}
 	a.lastFull = now.Add(-10 * time.Second)

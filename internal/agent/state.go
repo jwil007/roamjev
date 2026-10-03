@@ -481,17 +481,21 @@ func questions(cands []Candidate, verify bool) map[string]jev.Question {
 					"not_for": "a link that is clearly failing the client's current needs",
 				},
 				"scan_quick": map[string]string{
-					"what": "Briefly re-measure only the strongest few " +
-						"candidate APs (cheapest scan)",
-					"not_for": "discovering APs that are not known yet",
+					"what": "Re-measure two known channels: the strongest " +
+						"candidate's and the known channel measured longest " +
+						"ago; repeating it rotates through every known channel",
+					"not_for": "finding APs on channels not seen yet; it " +
+						"cannot discover new APs",
 				},
 				"scan_known": map[string]string{
-					"what":    "Re-measure every known AP",
-					"not_for": "discovering APs that are not known yet",
+					"what": "Re-measure every known channel (from earlier " +
+						"scans and the AP's neighbor list)",
+					"not_for": "finding APs on channels not seen yet; it " +
+						"cannot discover new APs",
 				},
 				"scan_full": map[string]string{
-					"what": "Sweep every channel to discover APs, including " +
-						"ones not seen before (most expensive scan)",
+					"what": "Sweep every channel the radio supports; the " +
+						"only way to find APs on channels not seen yet",
 					"not_for": "refreshing APs that are already known",
 				},
 				"roam": map[string]string{

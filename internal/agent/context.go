@@ -63,10 +63,10 @@ var briefing = map[string]any{
 			"link, a client should stay unless an alternative is " +
 			"substantially and lastingly better. Switching back and forth " +
 			"between options is churn, not improvement.",
-		"A scan of one or two channels takes the radio off channel for " +
-			"roughly 35-70 ms, which a voice call's jitter buffer absorbs: it " +
-			"is inaudible. Only long scans (many channels, seconds) disrupt " +
-			"calls. While moving, a client that stops measuring other APs " +
+		"A scan of one or two channels adds one short burst of delay " +
+			"(tens of ms, at most ~100 ms) that a voice call's jitter buffer " +
+			"mostly absorbs: it is effectively inaudible. Longer scans repeat " +
+			"those bursts for seconds, which a call can notice. While moving, a client that stops measuring other APs " +
 			"ends up on a fading link with no known alternative, so brief " +
 			"scans during calls are routine.",
 		"When the link is degraded and no known AP is clearly better, the " +
@@ -264,87 +264,21 @@ func (a *Agent) scanScopes(link Link, cands []Candidate) (quick, known []int) {
 
 func isDFS(freq int) bool { return freq >= 5260 && freq <= 5720 }
 
-func (a *Agent) scanCostWords(freqs []int) string {
-	if len(freqs) == 0 {
-		return "not available until a scan has found candidate APs"
-	}
-	dfs := 0
-	for _, f := range freqs {
-		if isDFS(f) {
-			dfs++
-		}
-	}
-	ms := a.estimateScanMs(freqs)
-	s := fmt.Sprintf("%d channel(s), about %.0f ms of off-channel dwell",
-		len(freqs), ms)
-	if dfs > 0 {
-		s += fmt.Sprintf(" (%d passive DFS)", dfs)
-	}
-	return s
-}
 
-// estimateScanMs uses measured per-channel dwell when available, split into
-// active and passive (DFS) channels.
-func (a *Agent) estimateScanMs(freqs []int) float64 {
-	active, passive := a.dwellActive, a.dwellPassive
-	if active == 0 {
-		active = 35
-	}
-	if passive == 0 {
-		passive = 105
-	}
-	var ms float64
-	for _, f := range freqs {
-		if isDFS(f) {
-			ms += passive
-		} else {
-			ms += active
-		}
-	}
-	return ms
-}
 
-// learnScanCost updates the dwell estimates from a finished scan. A scan
-// mixing DFS and non-DFS channels can't separate the two, so the passive
-// estimate keeps a fixed 3x ratio to the active one.
-func (a *Agent) learnScanCost(freqs []int, dur time.Duration) {
-	ms := float64(dur.Microseconds()) / 1000
-	if freqs == nil {
-		a.fullScanMs = ewma(a.fullScanMs, ms)
-		return
-	}
-	units := 0.0
-	for _, f := range freqs {
-		if isDFS(f) {
-			units += 3
-		} else {
-			units++
-		}
-	}
-	if units == 0 {
-		return
-	}
-	a.dwellActive = ewma(a.dwellActive, ms/units)
-	a.dwellPassive = 3 * a.dwellActive
-}
 
-func ewma(old, x float64) float64 {
-	if old == 0 {
-		return x
-	}
-	return 0.7*old + 0.3*x
-}
 
-// costs states what each action costs right now.
+// costs states what each action costs right now, in one format.
 func (a *Agent) costs(link Link, cands []Candidate) map[string]any {
 	quick, known := a.scanScopes(link, cands)
-	full := "a sweep of every channel"
-	if im := a.impactWords("full"); im != "" {
-		full += im
-	} else {
-		full += "; typically several seconds to complete, but most drivers " +
-			"return to the home channel between channels, so traffic " +
-			"continues with added delay rather than stopping"
+	dfs := func(fs []int) int {
+		n := 0
+		for _, f := range fs {
+			if isDFS(f) {
+				n++
+			}
+		}
+		return n
 	}
 	roam := "unknown"
 	if len(a.roamDurs) > 0 {
@@ -356,12 +290,9 @@ func (a *Agent) costs(link Link, cands []Candidate) map[string]any {
 		roam = "no roams measured yet; " + a.securityWords(link)
 	}
 	return map[string]any{
-		"scan_quick": a.scanCostWords(quick) + "; refreshes the strongest " +
-			"candidate plus the known channel measured longest ago, so " +
-			"repeated quick scans rotate through all known APs" + a.impactWords("quick"),
-		"scan_known": a.scanCostWords(known) + "; refreshes every known AP" +
-			a.impactWords("known"),
-		"scan_full":  full + "; also finds APs not seen before",
+		"scan_quick": a.scanCost("quick", len(quick), dfs(quick)),
+		"scan_known": a.scanCost("known", len(known), dfs(known)),
+		"scan_full":  a.scanCost("full", 0, 0),
 		"roam":       roam,
 	}
 }
@@ -494,43 +425,86 @@ func (a *Agent) markScanned(freqs []int, res []BSS, at time.Time) {
 
 // scanImpact is what a scan actually did to the link, measured by the
 // gateway probes: most drivers return to the home channel between scanned
-// channels, so a long scan usually adds delay rather than stopping traffic.
+// channels, so scans mostly add bursty delay (a probe sent while the radio
+// is away waits for it to come back) rather than stopping traffic.
 type scanImpact struct {
-	dur          time.Duration
-	lossPct      float64
-	latencyDelta float64 // ms, during vs the 10 s before
-	valid        bool
+	dur       time.Duration
+	channels  int
+	lossPct   float64
+	addTypMs  float64 // mean latency during the scan minus the 10 s before
+	addPeakMs float64 // slowest probe during the scan minus the mean before
+	valid     bool
 }
 
-func (a *Agent) measureScanImpact(kind string, from, to time.Time) {
+func (a *Agent) measureScanImpact(kind string, channels int, from, to time.Time) {
 	before := a.q.BetweenExcluding(from.Add(-10*time.Second), from, a.offChan)
 	during := a.q.Between(from, to.Add(300*time.Millisecond))
 	if a.scanImpact == nil {
 		a.scanImpact = map[string]scanImpact{}
 	}
-	im := scanImpact{dur: to.Sub(from)}
+	im := scanImpact{dur: to.Sub(from), channels: channels}
 	if during.Valid && during.Sent >= 2 {
 		im.valid = true
 		im.lossPct = during.LossPct
+		base := 0.0
 		if before.Valid {
-			im.latencyDelta = during.LatencyMs - before.LatencyMs
+			base = before.LatencyMs
 		}
+		im.addTypMs = math.Max(0, during.LatencyMs-base)
+		im.addPeakMs = math.Max(0, during.MaxMs-base)
 	}
 	a.scanImpact[kind] = im
 }
 
-// impactWords describes the measured effect of the last scan of a kind.
-func (a *Agent) impactWords(kind string) string {
+// scanCost states one scan option's cost in the same form for every kind:
+// channels, how long it takes, and what it did to the link last time, so
+// no option looks cheaper just because it's described differently.
+func (a *Agent) scanCost(kind string, channels int, dfs int) string {
+	head := ""
+	switch {
+	case kind == "full":
+		head = "every channel the radio supports"
+	case channels == 0:
+		return "not available until a scan has found candidate APs"
+	default:
+		head = fmt.Sprintf("%d channel(s)", channels)
+		if dfs > 0 {
+			head += fmt.Sprintf(" (%d passive DFS)", dfs)
+		}
+	}
 	im, ok := a.scanImpact[kind]
-	if !ok {
-		return ""
+	if ok && im.valid {
+		return fmt.Sprintf("%s; last one took %.1f s, and during it gateway probes "+
+			"were %.0f%% lost, latency +%.0f ms typical and up to +%.0f ms in bursts (measured)",
+			head, im.dur.Seconds(), im.lossPct, im.addTypMs, im.addPeakMs)
 	}
-	if !im.valid {
-		return fmt.Sprintf("; last one took %.1f s", im.dur.Seconds())
+	// Not measured yet: estimate from the per-channel time of whatever
+	// scans have been measured (dwell plus the return to the home channel).
+	per := a.perChannelSeconds()
+	n := float64(channels)
+	if kind == "full" {
+		n = 51
 	}
-	return fmt.Sprintf("; last one took %.1f s, and gateway probes during it were "+
-		"%.0f%% lost with latency %+.0f ms vs before (measured)",
-		im.dur.Seconds(), im.lossPct, im.latencyDelta)
+	return fmt.Sprintf("%s; not measured yet, estimated about %.1f s; scans "+
+		"typically add bursty latency (up to ~100 ms) while the radio visits other "+
+		"channels, with little loss", head, n*per)
+}
+
+// perChannelSeconds is the measured wall-clock time per scanned channel,
+// or a typical value before any scan has been measured.
+func (a *Agent) perChannelSeconds() float64 {
+	var secs float64
+	var ch int
+	for _, im := range a.scanImpact {
+		if im.channels > 0 {
+			secs += im.dur.Seconds()
+			ch += im.channels
+		}
+	}
+	if ch == 0 {
+		return 0.2
+	}
+	return secs / float64(ch)
 }
 
 // envChange states how the known AP list has changed since the last full

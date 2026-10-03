@@ -374,9 +374,14 @@ func (w *World) probeAP(now time.Time, a *ap, scanning bool) (linkq.Sample, uint
 	if scanning {
 		// Measured on real hardware: during a scan the radio returns to
 		// the home channel between channels, so gateway probes are delayed
-		// (waiting for the radio to come back) rather than lost.
+		// rather than lost, and the delay is bursty: a probe sent while
+		// the radio is away waits up to ~100 ms for it to come back.
 		pLoss += 0.02
-		lat += 15 + w.nr.Float64()*25
+		if w.nr.Float64() < 0.4 {
+			lat += 40 + w.nr.Float64()*60
+		} else {
+			lat += w.nr.Float64() * 15
+		}
 	}
 	lat += math.Abs(w.nr.NormFloat64()) * (1 + math.Max(0, util-50)*0.12 +
 		math.Max(0, 22-snr)*0.4)
