@@ -1,0 +1,89 @@
+package agent
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/jwil007/roamjev/internal/linkq"
+)
+
+type stubPolicy struct {
+	out PolicyOutput
+	err error
+	n   int
+}
+
+func (p *stubPolicy) Name() string { return "stub" }
+func (p *stubPolicy) Notify(PolicyEvent) { p.n++ }
+func (p *stubPolicy) Decide(context.Context, PolicyInput) (PolicyOutput, error) {
+	return p.out, p.err
+}
+
+type linkedRadio struct{ fakeRadio }
+
+func (r *linkedRadio) Link(context.Context) (Link, error) {
+	return Link{SSID: "lab", BSSID: "aa:00", WPAState: "COMPLETED", RSSI: -60, Freq: 5180}, nil
+}
+
+func lastDecision(st *Store) Decision {
+	d := st.Snapshot().Decisions
+	return d[len(d)-1]
+}
+
+// The fallback decides if and only if the primary errors.
+func TestFallbackOnlyWhenJevDown(t *testing.T) {
+	st, _ := NewStore("")
+	primary := &stubPolicy{out: PolicyOutput{Chosen: "stay", Confidence: 0.9}}
+	fallback := &stubPolicy{out: PolicyOutput{Chosen: "stay", Confidence: 1, Reason: "classic rule"}}
+	a := New(DefaultConfig(), &linkedRadio{}, linkq.NewRing(time.Minute), primary, st)
+	a.Fallback = fallback
+	again := make(chan string, 1)
+
+	a.decide(context.Background(), "interval", again)
+	if d := lastDecision(st); strings.Contains(d.Policy, "fallback") {
+		t.Fatalf("fallback used while primary was up: %+v", d)
+	}
+	primary.err = errors.New("jev request: connection refused")
+	a.decide(context.Background(), "interval", again)
+	d := lastDecision(st)
+	if !strings.Contains(d.Policy, "fallback") || d.Reason != "classic rule" || d.Executed != "stay" {
+		t.Fatalf("expected fallback decision, got %+v", d)
+	}
+	if d.Err == "" {
+		t.Fatal("Jev's error should still be recorded")
+	}
+	primary.err = nil
+	a.decide(context.Background(), "interval", again)
+	if d := lastDecision(st); strings.Contains(d.Policy, "fallback") {
+		t.Fatalf("Jev should be back in charge: %+v", d)
+	}
+}
+
+func TestSafetyNet(t *testing.T) {
+	st, _ := NewStore("")
+	a := New(DefaultConfig(), &linkedRadio{}, linkq.NewRing(time.Minute), &stubPolicy{}, st)
+	now := time.Now()
+	weak := Link{BSSID: "aa:00", RSSI: -80}
+	healthy := Link{BSSID: "aa:00", RSSI: -60}
+	stay := Decision{Chosen: "stay", Executed: "stay"}
+	if why := a.safetyNet(stay, weak, nil, now); !strings.HasPrefix(why, "safety net") {
+		t.Fatalf("weak link, nothing better known: want a full scan, got %q", why)
+	}
+	if why := a.safetyNet(stay, healthy, nil, now); why != "" {
+		t.Fatalf("healthy link: got %q", why)
+	}
+	better := []Candidate{{BSSID: "bb:01", RSSIDelta: 10, SeenAgoS: 5}}
+	if why := a.safetyNet(stay, weak, better, now); why != "" {
+		t.Fatalf("a fresh stronger candidate is known: got %q", why)
+	}
+	if why := a.safetyNet(Decision{Chosen: "roam", Executed: "roam"}, weak, nil, now); why != "" {
+		t.Fatalf("Jev already roaming: got %q", why)
+	}
+	a.lastFull = now.Add(-10 * time.Second)
+	if why := a.safetyNet(stay, weak, nil, now); why != "" {
+		t.Fatalf("recent full scan: got %q", why)
+	}
+}

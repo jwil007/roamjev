@@ -362,6 +362,9 @@ func (a *Agent) buildState(link Link, cands []Candidate, now time.Time) map[stri
 		}
 		scan["bands_with_measured_candidates"] = strings.Join(have, ", ")
 	}
+	for k, v := range a.envChange(link, cands) {
+		scan[k] = v
+	}
 	if len(a.neighbors) > 0 {
 		var nb []string
 		for _, f := range a.neighbors {

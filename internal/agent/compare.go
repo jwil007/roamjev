@@ -54,6 +54,7 @@ func Compare(w io.Writer, runs map[RunKey]Summary) {
 		{"ping-pongs", func(s Summary) float64 { return float64(s.PingPongs) }, false, "%.2f"},
 		{"avg gain vs staying", func(s Summary) float64 { return s.AvgGainVsStay }, true, "%+.3f"},
 		{"roams graded worse", func(s Summary) float64 { return float64(s.Worse) }, false, "%.2f"},
+		{"safety-net full scans", func(s Summary) float64 { return float64(s.SafetyNets) }, false, "%.1f"},
 		{"time scanning (s)", func(s Summary) float64 { return s.ScanTime.Seconds() }, false, "%.1f"},
 	}
 	for _, sc := range sortedKeys(scen) {

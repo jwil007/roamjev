@@ -93,13 +93,15 @@ func scenarioByName(name string) (*scenario, error) {
 		return convention(), nil
 	case "hospital":
 		return hospital(), nil
+	case "corridor":
+		return corridor(), nil
 	}
 	return nil, fmt.Errorf("unknown sim scenario %q (%s)", name,
 		strings.Join(ScenarioNames, ", "))
 }
 
 // ScenarioNames lists the available simulator environments.
-var ScenarioNames = []string{"hallway", "boundary", "office", "convention", "hospital"}
+var ScenarioNames = []string{"hallway", "boundary", "office", "convention", "hospital", "corridor"}
 
 func hallway() *scenario {
 	s := &scenario{
@@ -298,4 +300,34 @@ func fullScanFreqs() []int {
 	}
 	slices.Sort(f)
 	return f
+}
+
+// corridor: a 320 m corridor with 5 GHz APs every 40 m, each on its own
+// channel, and no 802.11k. Walking end to end takes the client far beyond
+// what its opening scan could hear; quick and known scans only revisit
+// known channels, so a full scan is the only way to find the APs ahead.
+func corridor() *scenario {
+	s := &scenario{
+		name:     "corridor",
+		describe: "320 m corridor, 5 GHz APs every 40 m on distinct channels, no 802.11k, FT-PSK; walking end to end, so only full scans find the APs ahead",
+		exponent: 3.2, shadow: 0.8,
+		security: "WPA2-PSK", ft: true, roamMs: roamFT,
+		speed: 1.4, pauseEvery: 60,
+		nrCoverage: 0,
+		path: []waypoint{{0, 0, 5, 15}, {320, 0, 5, 15}},
+		traffic: []phase{{"idle", 3, 20, 60}, {"call", 5, 60, 180},
+			{"download", 2, 20, 60}},
+	}
+	ch5 := []int{36, 149, 52, 157, 100, 44, 116, 161, 60}
+	for i := 0; i < 9; i++ {
+		y := 3.0
+		if i%2 == 1 {
+			y = -3
+		}
+		s.aps = append(s.aps, apSpec{x: float64(i) * 40, y: y,
+			baseUtil: 20 + float64((i*11)%15),
+			radios: []radioSpec{{"5GHz", ch5[i], "80MHz", "802.11ax", 20}}})
+	}
+	s.hot = func(int, time.Duration) float64 { return 0 }
+	return s
 }

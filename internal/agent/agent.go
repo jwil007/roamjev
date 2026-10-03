@@ -44,6 +44,12 @@ type Config struct {
 	// with the fresh reading. It never decides on its own to stay.
 	VerifyRoam    bool
 	VerifyDeltaDB int
+	// SafetyNet runs a full scan when the link is degraded, no known AP is
+	// likely better, and Jev chose neither a full scan nor a roam. It's the
+	// one place code acts on its own judgment, for the case where staying
+	// blind means losing the connection (e.g. walking past every AP the
+	// client knows). Every firing is logged.
+	SafetyNet bool
 }
 
 func DefaultConfig() Config {
@@ -59,6 +65,7 @@ func DefaultConfig() Config {
 		MinRoamGap:        5 * time.Second,
 		MinScanGap:        4 * time.Second,
 		VerifyDeltaDB:     6,
+		SafetyNet:         true,
 		BudgetUSD:         2,
 	}
 }
@@ -68,7 +75,11 @@ type Agent struct {
 	radio  Radio
 	q      *linkq.Ring
 	policy Policy
-	store  *Store
+	// Fallback decides only while the primary (Jev) can't: errors,
+	// timeouts, or a spent budget. It receives every event either way so
+	// its own state (timers, penalties, tiers) is current when needed.
+	Fallback Policy
+	store    *Store
 	// Gateway reports the probed gateway for the UI, if known.
 	Gateway func() string
 
@@ -95,6 +106,8 @@ type Agent struct {
 	neighbors      []int
 	neighborsTried bool
 	chanScanned    map[int]time.Time // last time each channel was measured
+	scanImpact     map[string]scanImpact // measured effect of the last scan of each kind
+	lastFullSet    map[string]bool       // BSSIDs found by the last full scan
 	lastFull       time.Time
 	// Measured costs (decision loop only).
 	dwellActive, dwellPassive, fullScanMs float64
@@ -334,7 +347,7 @@ func (a *Agent) decide(ctx context.Context, trigger string,
 		a.selfRoam = false
 		a.recordJoin(link.BSSID, a.connChange)
 		a.refreshNeighbors(ctx)
-		a.policy.Notify(PolicyEvent{Kind: "conn_change", At: a.connChange,
+		a.notify(PolicyEvent{Kind: "conn_change", At: a.connChange,
 			Target: link.BSSID})
 	}
 	a.observeRSSI(link.BSSID, link.RSSI)
@@ -342,7 +355,7 @@ func (a *Agent) decide(ctx context.Context, trigger string,
 	a.mu.Lock()
 	paused := a.paused
 	a.mu.Unlock()
-	if paused {
+	if paused && a.Fallback == nil {
 		return
 	}
 
@@ -357,12 +370,18 @@ func (a *Agent) decide(ctx context.Context, trigger string,
 	d := Decision{ID: a.decisionID, T: now, Trigger: trigger,
 		State: stateJSON, Policy: a.policy.Name()}
 
-	if _, isJev := a.policy.(*JevPolicy); isJev {
-		a.setBusy("asking Jev")
+	in := PolicyInput{Now: now, Link: link, Cands: cands, Scan: a.scan,
+		ScanAt: a.scanAt, State: state, LastRoam: a.lastRoam,
+		ConnChange: a.connChange}
+	var out PolicyOutput
+	if paused {
+		err = errors.New("Jev paused: run budget reached")
+	} else {
+		if _, isJev := a.policy.(*JevPolicy); isJev {
+			a.setBusy("asking Jev")
+		}
+		out, err = a.policy.Decide(ctx, in)
 	}
-	out, err := a.policy.Decide(ctx, PolicyInput{Now: now, Link: link,
-		Cands: cands, Scan: a.scan, ScanAt: a.scanAt, State: state,
-		LastRoam: a.lastRoam, ConnChange: a.connChange})
 	a.setBusy("")
 	if ctx.Err() != nil {
 		return // shutting down; not a decider failure
@@ -370,7 +389,7 @@ func (a *Agent) decide(ctx context.Context, trigger string,
 	d.Questions = out.Questions
 	d.Reason = out.Reason
 
-	if out.UsedJev {
+	if out.UsedJev && !paused {
 		a.mu.Lock()
 		a.calls++
 		if err != nil {
@@ -391,6 +410,23 @@ func (a *Agent) decide(ctx context.Context, trigger string,
 		}
 	}
 
+	// Jev is down (unreachable, erroring, or out of budget): the fallback
+	// decides this cycle, and Jev gets the next one.
+	if err != nil && a.Fallback != nil && ctx.Err() == nil {
+		jevErr := err.Error()
+		if errors.Is(err, context.DeadlineExceeded) {
+			jevErr = fmt.Sprintf("timed out after %v", a.cfg.JevTimeout)
+		}
+		fo, ferr := a.Fallback.Decide(ctx, in)
+		if ferr == nil {
+			slog.Warn("Jev unavailable; fallback decided", "jev_err", jevErr,
+				"fallback", a.Fallback.Name(), "chosen", fo.Chosen)
+			d.Err = jevErr
+			d.Policy = a.Fallback.Name() + " (fallback: Jev unavailable)"
+			d.Reason = fo.Reason
+			out, err = fo, nil
+		}
+	}
 	if err != nil {
 		d.Err = err.Error()
 		d.Executed = "nothing (decider unavailable)"
@@ -422,6 +458,9 @@ func (a *Agent) decide(ctx context.Context, trigger string,
 	a.store.SetCandidates(cands)
 
 	d.Executed, d.Blocked = a.railCheck(d, link, now)
+	if why := a.safetyNet(d, link, cands, now); why != "" {
+		d.Executed, d.Blocked = "scan_full", why
+	}
 	slog.Info("Decision", "id", d.ID, "trigger", trigger,
 		"chosen", d.Chosen, "conf", d.Confidence, "target", d.Target,
 		"executed", d.Executed, "blocked", d.Blocked,
@@ -498,6 +537,9 @@ func (a *Agent) doScan(ctx context.Context, d Decision, link Link,
 	start := time.Now()
 	err := a.radio.Scan(ctx, freqs)
 	dur := time.Since(start)
+	if err == nil {
+		a.measureScanImpact(kind, start, time.Now())
+	}
 	a.markOffChannel(start, time.Now())
 	act := Action{T: start, DecisionID: d.ID, Kind: "scan_" + kind,
 		Freqs: freqs, DurationMs: float64(dur.Microseconds()) / 1000}
@@ -511,6 +553,10 @@ func (a *Agent) doScan(ctx context.Context, d Decision, link Link,
 			a.scanFetched = a.scanAt
 			if kind == "full" {
 				a.lastFull = a.scanAt
+				a.lastFullSet = map[string]bool{}
+				for _, b := range res {
+					a.lastFullSet[b.BSSID] = true
+				}
 			}
 			a.scanRSSI, a.scanBSSID = link.RSSI, link.BSSID
 			act.Found = len(res)
@@ -523,7 +569,7 @@ func (a *Agent) doScan(ctx context.Context, d Decision, link Link,
 	}
 	a.setBusy("")
 	a.store.AddAction(act)
-	a.policy.Notify(PolicyEvent{Kind: "scan", At: time.Now(),
+	a.notify(PolicyEvent{Kind: "scan", At: time.Now(),
 		Success: act.Success, Message: kind})
 	if act.Success {
 		a.addRecent("%s scan (%d channels, %d ms) found %d APs for this SSID",
@@ -553,7 +599,7 @@ func (a *Agent) doRoam(ctx context.Context, d Decision, link Link) {
 		act.Message = err.Error()
 	}
 	a.store.AddAction(act)
-	a.policy.Notify(PolicyEvent{Kind: "roam", At: done, Target: d.Target,
+	a.notify(PolicyEvent{Kind: "roam", At: done, Target: d.Target,
 		Success: act.Success, Message: act.Message})
 	m := a.mem[d.Target]
 	if m == nil {
@@ -759,4 +805,47 @@ func (a *Agent) refreshNeighbors(ctx context.Context) {
 		return
 	}
 	a.neighbors = f // a hint: vendor lists are often incomplete or empty
+}
+
+// notify tells the policy, and the fallback if any, what happened.
+func (a *Agent) notify(ev PolicyEvent) {
+	a.policy.Notify(ev)
+	if a.Fallback != nil {
+		a.Fallback.Notify(ev)
+	}
+}
+
+// safetyNet returns a reason to override Jev with a full scan, or "".
+func (a *Agent) safetyNet(d Decision, link Link, cands []Candidate, now time.Time) string {
+	if !a.cfg.SafetyNet || a.cfg.Observe || strings.Contains(d.Policy, "fallback") {
+		return ""
+	}
+	if d.Executed == "scan_full" || d.Executed == "roam" {
+		return ""
+	}
+	if !a.lastFull.IsZero() && now.Sub(a.lastFull) < 30*time.Second {
+		return ""
+	}
+	if !a.scanAt.IsZero() && now.Sub(a.scanAt) < a.cfg.MinScanGap {
+		return ""
+	}
+	since := now.Add(-10 * time.Second)
+	if a.connChange.After(since) {
+		since = a.connChange
+	}
+	w := a.q.BetweenExcluding(since, now, a.offChan)
+	var degraded string
+	switch {
+	case link.RSSI <= -75:
+		degraded = fmt.Sprintf("signal %d dBm", link.RSSI)
+	case w.Valid && w.LossPct >= 10:
+		degraded = fmt.Sprintf("%.0f%% gateway loss", w.LossPct)
+	default:
+		return ""
+	}
+	if a.strongerFresh(cands) > 0 {
+		return ""
+	}
+	return "safety net: link degraded (" + degraded + ") and no recently " +
+		"measured AP is 6+ dB stronger; full scan"
 }

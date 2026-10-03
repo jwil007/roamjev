@@ -120,3 +120,30 @@ func TestNeighborReport(t *testing.T) {
 		t.Fatalf("partial neighbor list changed between requests: %v vs %v", a, b)
 	}
 }
+
+// In the corridor, the opening full scan can't hear the far end: only a
+// later full scan, after walking, finds those APs.
+func TestCorridorNeedsRescan(t *testing.T) {
+	w, err := NewWorld(linkq.NewRing(time.Minute), 0, "corridor", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Scan(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	res, _ := w.ScanResults(context.Background(), "")
+	maxX := 0.0
+	for _, b := range res {
+		for _, a := range w.aps {
+			if a.bssid == b.BSSID && a.x > maxX {
+				maxX = a.x
+			}
+		}
+	}
+	if maxX >= 200 {
+		t.Fatalf("opening scan from x=0 heard an AP at x=%.0f; the far end should be out of range", maxX)
+	}
+	if _, err := w.NeighborFreqs(context.Background()); err == nil {
+		t.Fatal("corridor APs should not provide 802.11k neighbor reports")
+	}
+}

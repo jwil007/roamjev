@@ -69,6 +69,10 @@ var briefing = map[string]any{
 			"calls. While moving, a client that stops measuring other APs " +
 			"ends up on a fading link with no known alternative, so brief " +
 			"scans during calls are routine.",
+		"When the link is degraded and no known AP is clearly better, the " +
+			"client has probably moved beyond the APs it knows about. Only a " +
+			"full scan can find new ones, and then it is worth its cost: a " +
+			"slow scan is far better than losing the connection.",
 		"Quick and known scans only re-measure known channels. " +
 			"Neighboring APs often use different channels on 5 and 6 GHz, " +
 			"so as the client moves, APs ahead on new channels are found " +
@@ -271,7 +275,7 @@ func (a *Agent) scanCostWords(freqs []int) string {
 		}
 	}
 	ms := a.estimateScanMs(freqs)
-	s := fmt.Sprintf("%d channel(s), about %.0f ms off the home channel",
+	s := fmt.Sprintf("%d channel(s), about %.0f ms of off-channel dwell",
 		len(freqs), ms)
 	if dfs > 0 {
 		s += fmt.Sprintf(" (%d passive DFS)", dfs)
@@ -335,11 +339,12 @@ func ewma(old, x float64) float64 {
 func (a *Agent) costs(link Link, cands []Candidate) map[string]any {
 	quick, known := a.scanScopes(link, cands)
 	full := "a sweep of every channel"
-	if a.fullScanMs > 0 {
-		full += fmt.Sprintf(", about %.1f s off the home channel (measured)",
-			a.fullScanMs/1000)
+	if im := a.impactWords("full"); im != "" {
+		full += im
 	} else {
-		full += ", typically 2-4 s off the home channel"
+		full += "; typically several seconds to complete, but most drivers " +
+			"return to the home channel between channels, so traffic " +
+			"continues with added delay rather than stopping"
 	}
 	roam := "unknown"
 	if len(a.roamDurs) > 0 {
@@ -353,8 +358,9 @@ func (a *Agent) costs(link Link, cands []Candidate) map[string]any {
 	return map[string]any{
 		"scan_quick": a.scanCostWords(quick) + "; refreshes the strongest " +
 			"candidate plus the known channel measured longest ago, so " +
-			"repeated quick scans rotate through all known APs",
-		"scan_known": a.scanCostWords(known) + "; refreshes every known AP",
+			"repeated quick scans rotate through all known APs" + a.impactWords("quick"),
+		"scan_known": a.scanCostWords(known) + "; refreshes every known AP" +
+			a.impactWords("known"),
 		"scan_full":  full + "; also finds APs not seen before",
 		"roam":       roam,
 	}
@@ -484,4 +490,87 @@ func (a *Agent) markScanned(freqs []int, res []BSS, at time.Time) {
 			a.chanScanned[b.Freq] = at
 		}
 	}
+}
+
+// scanImpact is what a scan actually did to the link, measured by the
+// gateway probes: most drivers return to the home channel between scanned
+// channels, so a long scan usually adds delay rather than stopping traffic.
+type scanImpact struct {
+	dur          time.Duration
+	lossPct      float64
+	latencyDelta float64 // ms, during vs the 10 s before
+	valid        bool
+}
+
+func (a *Agent) measureScanImpact(kind string, from, to time.Time) {
+	before := a.q.BetweenExcluding(from.Add(-10*time.Second), from, a.offChan)
+	during := a.q.Between(from, to.Add(300*time.Millisecond))
+	if a.scanImpact == nil {
+		a.scanImpact = map[string]scanImpact{}
+	}
+	im := scanImpact{dur: to.Sub(from)}
+	if during.Valid && during.Sent >= 2 {
+		im.valid = true
+		im.lossPct = during.LossPct
+		if before.Valid {
+			im.latencyDelta = during.LatencyMs - before.LatencyMs
+		}
+	}
+	a.scanImpact[kind] = im
+}
+
+// impactWords describes the measured effect of the last scan of a kind.
+func (a *Agent) impactWords(kind string) string {
+	im, ok := a.scanImpact[kind]
+	if !ok {
+		return ""
+	}
+	if !im.valid {
+		return fmt.Sprintf("; last one took %.1f s", im.dur.Seconds())
+	}
+	return fmt.Sprintf("; last one took %.1f s, and gateway probes during it were "+
+		"%.0f%% lost with latency %+.0f ms vs before (measured)",
+		im.dur.Seconds(), im.lossPct, im.latencyDelta)
+}
+
+// envChange states how the known AP list has changed since the last full
+// scan, and how many recently measured candidates are stronger than the
+// current link. Facts only: deciding whether that calls for a rescan is
+// Jev's job (with a safety net in agent.go if it doesn't).
+func (a *Agent) envChange(link Link, cands []Candidate) map[string]any {
+	m := map[string]any{}
+	if a.lastFullSet != nil {
+		now := map[string]bool{}
+		for _, b := range a.scan {
+			now[b.BSSID] = true
+		}
+		gone, fresh := 0, 0
+		for b := range a.lastFullSet {
+			if !now[b] {
+				gone++
+			}
+		}
+		for b := range now {
+			if !a.lastFullSet[b] {
+				fresh++
+			}
+		}
+		m["since_last_full_scan"] = fmt.Sprintf("%d of the %d APs it found are no "+
+			"longer heard; %d APs heard since that it didn't find",
+			gone, len(a.lastFullSet), fresh)
+	}
+	m["stronger_candidates_measured_last_30s"] = a.strongerFresh(cands)
+	return m
+}
+
+// strongerFresh counts candidates measured in the last 30 s whose signal
+// is at least 6 dB above the current link's.
+func (a *Agent) strongerFresh(cands []Candidate) int {
+	n := 0
+	for _, c := range cands {
+		if !c.Current && c.SeenAgoS <= 30 && c.RSSIDelta >= 6 {
+			n++
+		}
+	}
+	return n
 }

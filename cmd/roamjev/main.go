@@ -46,6 +46,7 @@ func run() error {
 	policyName := flag.String("policy", "jev", "decider: jev, or classic (roamctl's algorithm with its default config)")
 	simSeed := flag.Uint64("sim-seed", 0, "simulator seed; runs with the same seed see the identical world (0 = random)")
 	verifyRoam := flag.Bool("verify-roam", true, "re-measure the target's channel right before each roam; cancel if gone, re-decide if it moved 6+ dB")
+	safetyNet := flag.Bool("safety-net", true, "full scan when the link is degraded, no known AP is likely better, and Jev chose neither a full scan nor a roam")
 	hideHistory := flag.Bool("hide-history", false, "experiment control: omit roam-count, dwell and ping-pong facts from Jev's state")
 	replay := flag.String("replay", "", "serve the dashboard for a recorded journal (no radio, no Jev)")
 	listen := flag.String("listen", "127.0.0.1:8077", "dashboard address")
@@ -199,6 +200,7 @@ func run() error {
 	cfg.Observe = *observe
 	cfg.HideHistory = *hideHistory
 	cfg.VerifyRoam = *verifyRoam
+	cfg.SafetyNet = *safetyNet
 
 	mode := "live"
 	if *simMode {
@@ -286,6 +288,14 @@ func run() error {
 	printDashboardLink(*listen)
 
 	a := agent.New(cfg, radio, ring, policy, store)
+	if _, isJev := policy.(*agent.JevPolicy); isJev {
+		// Classic decides if and only if Jev can't.
+		ccfg, err := config.Default()
+		if err != nil {
+			return fmt.Errorf("fallback policy config: %w", err)
+		}
+		a.Fallback = agent.NewClassicPolicy(ccfg)
+	}
 	a.Gateway = gateway
 	return a.Run(ctx)
 }

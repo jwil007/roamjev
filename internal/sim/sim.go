@@ -21,6 +21,14 @@ import (
 	"github.com/jwil007/roamjev/internal/linkq"
 )
 
+// homeMs is the time spent back on the home channel between scanned
+// channels; with ~51 channels a full scan takes ~10 s, close to the 13 s
+// measured on a real ath12k client.
+const homeMs = 150
+
+// bssExpiration matches wpa_supplicant's default bss_expiration_age.
+const bssExpiration = 180 * time.Second
+
 // Noise floors by band. 2.4 GHz is crowded with Bluetooth, microwaves,
 // cordless devices and every nearby network on just three channels; 6 GHz is
 // new spectrum with no legacy clients. On top of its floor, each 2.4 GHz
@@ -293,10 +301,17 @@ func (w *World) advance(now time.Time, dt float64) {
 // traffic accumulates interface bytes for the current activity. A download
 // takes what the link can carry; nothing moves while off channel.
 func (w *World) traffic(dt float64) {
-	if w.down || w.busy != "" {
+	if w.down || w.busy == "roam" {
 		w.rxBytes += 50 * dt
 		return
 	}
+	// While scanning, the radio returns home between channels: traffic
+	// continues at reduced capacity.
+	scale := 1.0
+	if w.busy == "scan" {
+		scale = 0.6
+	}
+	dt *= scale
 	switch w.activity {
 	case "idle":
 		w.rxBytes += 300 * dt
@@ -355,11 +370,14 @@ func (w *World) probeAP(now time.Time, a *ap, scanning bool) (linkq.Sample, uint
 	snr := w.rssiOf(a) + w.nr.NormFloat64()*1.5 - a.noise()
 	util := a.util
 	pLoss := 0.5/(1+math.Exp((snr-12)/2.2)) + math.Max(0, util-60)/40*0.08
-	if scanning {
-		// Off the home channel for most of a scan.
-		pLoss += 0.8
-	}
 	lat := 1.5 + math.Max(0, 25-snr)*0.8 + math.Max(0, util-40)*0.25
+	if scanning {
+		// Measured on real hardware: during a scan the radio returns to
+		// the home channel between channels, so gateway probes are delayed
+		// (waiting for the radio to come back) rather than lost.
+		pLoss += 0.02
+		lat += 15 + w.nr.Float64()*25
+	}
 	lat += math.Abs(w.nr.NormFloat64()) * (1 + math.Max(0, util-50)*0.12 +
 		math.Max(0, 22-snr)*0.4)
 	out := uint64(40 + w.nr.IntN(20))
@@ -433,6 +451,10 @@ func (w *World) Scan(ctx context.Context, freqs []int) error {
 	for _, f := range list {
 		ms += dwellMs(f)
 	}
+	if len(list) > 1 {
+		// Back to the home channel between scanned channels.
+		ms += float64(len(list)-1) * homeMs
+	}
 	w.mu.Lock()
 	w.busy = "scan"
 	w.mu.Unlock()
@@ -481,6 +503,12 @@ func (w *World) ScanResults(_ context.Context, _ string) ([]agent.BSS, error) {
 	var out []agent.BSS
 	for k, b := range w.cache {
 		b.Age = time.Since(w.cacheAt[k])
+		if b.Age > bssExpiration {
+			// wpa_supplicant drops entries not seen for bss_expiration_age.
+			delete(w.cache, k)
+			delete(w.cacheAt, k)
+			continue
+		}
 		out = append(out, b)
 	}
 	slices.SortFunc(out, func(a, b agent.BSS) int { return b.RSSI - a.RSSI })

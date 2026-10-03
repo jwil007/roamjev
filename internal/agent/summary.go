@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"strings"
 	"fmt"
 	"io"
 	"slices"
@@ -45,6 +46,8 @@ type Summary struct {
 	Errors        int
 	Blocked       int
 	MedianLatency float64
+	Fallbacks     int // decisions made by the fallback because Jev was down
+	SafetyNets    int // full scans the safety net forced
 	CostUSD       float64
 	// Mean yes-probability of "roam would be short-lived" on decisions where
 	// Jev chose to roam vs chose not to.
@@ -221,10 +224,17 @@ func Summarize(s *Store) Summary {
 		sum.CostUSD += d.CostUSD
 		if d.Err != "" {
 			sum.Errors++
-			continue
+			if !strings.Contains(d.Policy, "fallback") {
+				continue
+			}
 		}
-		if d.Blocked != "" {
+		if strings.HasPrefix(d.Blocked, "safety net") {
+			sum.SafetyNets++
+		} else if d.Blocked != "" {
 			sum.Blocked++
+		}
+		if strings.Contains(d.Policy, "fallback") {
+			sum.Fallbacks++
 		}
 		lats = append(lats, d.LatencyMs)
 		if a, ok := d.Answers["roam_short_lived"]; ok {
@@ -271,6 +281,7 @@ func (s Summary) Print(w io.Writer, name string) {
 	} else {
 		p("decisions", "%d  (%d blocked by rails)", s.Calls, s.Blocked)
 	}
+	p("safety net / fallback", "%d forced full scans; %d decisions by the fallback while Jev was down", s.SafetyNets, s.Fallbacks)
 	p("short-lived? (noul)", "%.2f when choosing roam, %.2f otherwise", s.ShortLivedWhenRoam, s.ShortLivedWhenNot)
 }
 
