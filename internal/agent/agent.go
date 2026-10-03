@@ -54,9 +54,9 @@ type Config struct {
 
 func DefaultConfig() Config {
 	return Config{
-		Interval:          3 * time.Second,
-		JevTimeout:        1500 * time.Millisecond,
-		MaxCandidates:     6,
+		Interval:      3 * time.Second,
+		JevTimeout:    1500 * time.Millisecond,
+		MaxCandidates: 6,
 		// 0: act on Jev's top choice. Confidence measures how concentrated
 		// the whole distribution is, so with five actions a clear 55%
 		// "roam" scores ~0.3-0.45; a 0.5 rail blocked ~80% of Jev's roam
@@ -84,17 +84,17 @@ type Agent struct {
 	Gateway func() string
 
 	// Owned by the decision loop.
-	ssid       string
-	scan       []BSS
-	scanAt     time.Time
-	scanKind   string
+	ssid     string
+	scan     []BSS
+	scanAt   time.Time
+	scanKind string
 	// scanFetched is when a.scan was last read from the radio; each BSS's
 	// Age is relative to that moment.
 	scanFetched time.Time
 	// scanRSSI is the current AP's RSSI when the last scan ran, so the state
 	// can say how much the client's situation changed since.
-	scanRSSI  int
-	scanBSSID string
+	scanRSSI   int
+	scanBSSID  string
 	lastRoam   time.Time
 	connChange time.Time
 	prevBSSID  string
@@ -105,12 +105,12 @@ type Agent struct {
 	// neighbors are channels from the current AP's 802.11k neighbor report.
 	neighbors      []int
 	neighborsTried bool
-	chanScanned    map[int]time.Time // last time each channel was measured
+	chanScanned    map[int]time.Time     // last time each channel was measured
 	scanImpact     map[string]scanImpact // measured effect of the last scan of each kind
 	lastFullSet    map[string]bool       // BSSIDs found by the last full scan
 	lastFull       time.Time
 	// Measured costs (decision loop only).
-	roamDurs                              []int
+	roamDurs   []int
 	mem        map[string]*bssMemory
 	recent     []string
 	decisionID int
@@ -122,12 +122,12 @@ type Agent struct {
 	link     Link
 	rssiHis  []rssiPoint
 	counters []counterPoint
-	busy    string
-	calls   int
-	errs    int
-	spent   float64
-	latSum  float64
-	paused  bool
+	busy     string
+	calls    int
+	errs     int
+	spent    float64
+	latSum   float64
+	paused   bool
 }
 
 type rssiPoint struct {
@@ -284,11 +284,11 @@ func (a *Agent) tickLoop(ctx context.Context) {
 				EffMbps:     effMbps(l.RxBitrate, l.UtilPct),
 				TrafficKbps: math.Round(kbps),
 				Activity:    activity,
-				T: now, BSSID: l.BSSID, Freq: l.Freq, RSSI: l.RSSI,
+				T:           now, BSSID: l.BSSID, Freq: l.Freq, RSSI: l.RSSI,
 				TxMCS: l.TxMCS, RxMCS: l.RxMCS,
-				TxMbps:    float64(l.TxBitrate) / 1e6,
-				RxMbps:    float64(l.RxBitrate) / 1e6,
-				MOS:       w.MOS, LossPct: w.LossPct,
+				TxMbps: float64(l.TxBitrate) / 1e6,
+				RxMbps: float64(l.RxBitrate) / 1e6,
+				MOS:    w.MOS, LossPct: w.LossPct,
 				LatencyMs: w.LatencyMs, JitterMs: w.JitterMs,
 				TCPRetransPct: a.q.Last(10 * time.Second).TCPRetransPct,
 				TCPOutSegs:    a.q.Last(10 * time.Second).TCPOutSegs,

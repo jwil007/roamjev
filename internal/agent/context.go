@@ -264,10 +264,6 @@ func (a *Agent) scanScopes(link Link, cands []Candidate) (quick, known []int) {
 
 func isDFS(freq int) bool { return freq >= 5260 && freq <= 5720 }
 
-
-
-
-
 // costs states what each action costs right now, in one format.
 func (a *Agent) costs(link Link, cands []Candidate) map[string]any {
 	quick, known := a.scanScopes(link, cands)
@@ -293,7 +289,7 @@ func (a *Agent) costs(link Link, cands []Candidate) map[string]any {
 		wire["scan_quick"]: a.scanCost("quick", len(quick), dfs(quick)),
 		wire["scan_known"]: a.scanCost("known", len(known), dfs(known)),
 		wire["scan_full"]:  a.scanCost("full", 0, 0),
-		"roam":       roam,
+		"roam":             roam,
 	}
 }
 

@@ -1,29 +1,29 @@
 package agent
 
 import (
-	"strings"
 	"fmt"
 	"io"
 	"slices"
+	"strings"
 	"time"
 )
 
 // Summary is a run's scorecard, computed from a journal. The dashboard
 // computes the same numbers in JS; this is for comparing runs side by side.
 type Summary struct {
-	Mode          string
-	Duration      time.Duration
-	AvgMOS        float64
-	PctGood       float64 // share of connected seconds with MOS >= 4.03
-	PctDown       float64
-	AvgRxMbps     float64 // PHY rate: what the link could carry
-	AvgEffMbps    float64 // PHY rate x free airtime
+	Mode       string
+	Duration   time.Duration
+	AvgMOS     float64
+	PctGood    float64 // share of connected seconds with MOS >= 4.03
+	PctDown    float64
+	AvgRxMbps  float64 // PHY rate: what the link could carry
+	AvgEffMbps float64 // PHY rate x free airtime
 	// Judged when each matters (simulator ground truth for the activity).
-	PctGoodOnCall  float64 // share of call seconds with MOS >= 4.03
-	MOSOnCall      float64 // average MOS during calls
-	EffOnDownload  float64 // avg effective Mb/s during downloads
-	PctOffChannel  float64 // share of the run spent scanning or roaming
-	AvgRoamMs      float64
+	PctGoodOnCall float64 // share of call seconds with MOS >= 4.03
+	MOSOnCall     float64 // average MOS during calls
+	EffOnDownload float64 // avg effective Mb/s during downloads
+	PctOffChannel float64 // share of the run spent scanning or roaming
+	AvgRoamMs     float64
 	AvgRSSI       float64
 	PctWeak       float64 // share of connected seconds below -75 dBm
 	PctLowMCS     float64 // share of connected seconds at rx MCS <= 3

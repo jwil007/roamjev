@@ -334,12 +334,12 @@ func (a *Agent) buildState(link Link, cands []Candidate, now time.Time) map[stri
 		m := map[string]any{
 			"id": c.ID, "band": c.Band, "channel": c.Channel,
 			"width": c.Width, "phy": c.PHY, "rssi_dbm": c.RSSI,
-			"rssi_vs_current_db": c.RSSIDelta,
-			"est_mcs": estMCS(c.RSSI, c.Band, c.PHY),
-			"est_phy_mbps":           est,
+			"rssi_vs_current_db":             c.RSSIDelta,
+			"est_mcs":                        estMCS(c.RSSI, c.Band, c.PHY),
+			"est_phy_mbps":                   est,
 			"est_mbps_after_airtime_sharing": int(after),
-			"est_rate_vs_current":    ratio(after, a.curEstAfterAt(c.RefRSSI, link, cur)),
-			"measured_seconds_ago":   c.SeenAgoS,
+			"est_rate_vs_current":            ratio(after, a.curEstAfterAt(c.RefRSSI, link, cur)),
+			"measured_seconds_ago":           c.SeenAgoS,
 		}
 		if c.UtilPct >= 0 {
 			m["channel_utilization_pct"] = c.UtilPct
@@ -434,17 +434,17 @@ func (a *Agent) buildState(link Link, cands []Candidate, now time.Time) map[stri
 	client := a.clientState(now)
 	moving := strings.HasPrefix(fmt.Sprint(client["motion"]), "probably moving")
 	return map[string]any{
-		"situation":   a.situation(link, cands, moving, dropIn),
-		"briefing":    briefing,
-		"client":      client,
-		"environment": a.environment(link),
+		"situation":    a.situation(link, cands, moving, dropIn),
+		"briefing":     briefing,
+		"client":       client,
+		"environment":  a.environment(link),
 		"action_costs": a.costs(link, cands),
 		"connection": stateLink{
-			AP:     cur,
-			Signal: sig,
-			Radio:      a.radioMap(link, cur),
-			Gateway10s: q10,
-			Gateway60s: gatewayMap(w60),
+			AP:          cur,
+			Signal:      sig,
+			Radio:       a.radioMap(link, cur),
+			Gateway10s:  q10,
+			Gateway60s:  gatewayMap(w60),
 			AppRetrans:  retr,
 			SecondsOnAP: secOnAP,
 		},
@@ -622,11 +622,11 @@ func (a *Agent) radioMap(link Link, cur map[string]any) map[string]any {
 	}
 	m := map[string]any{
 		"band": band, "width": link.Width,
-		"rx_mcs":         fmt.Sprintf("%d (max %d for %s)", link.RxMCS, maxMCS(phy), orUnknown(phy)),
-		"tx_mcs":         link.TxMCS,
-		"rx_phy_mbps":    link.RxBitrate / 1_000_000,
-		"tx_phy_mbps":    link.TxBitrate / 1_000_000,
-		"est_phy_mbps":   estPHYMbps(link.RSSI, band, link.Width, phy),
+		"rx_mcs":                         fmt.Sprintf("%d (max %d for %s)", link.RxMCS, maxMCS(phy), orUnknown(phy)),
+		"tx_mcs":                         link.TxMCS,
+		"rx_phy_mbps":                    link.RxBitrate / 1_000_000,
+		"tx_phy_mbps":                    link.TxBitrate / 1_000_000,
+		"est_phy_mbps":                   estPHYMbps(link.RSSI, band, link.Width, phy),
 		"est_mbps_after_airtime_sharing": int(a.curEstAfter(link, cur)),
 	}
 	if u := curUtil(cur); u > 0 {

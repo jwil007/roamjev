@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -94,18 +95,36 @@ func (e *APIError) Retryable() bool {
 }
 
 type Client struct {
-	Endpoint string
-	Model    string
-	key      string
-	http     *http.Client
+	Endpoint  string
+	Model     string
+	key       string
+	http      *http.Client
+	transport *http.Transport
 }
 
 func New(key string) *Client {
+	// HTTP/1.1 only. Over HTTP/2, a timed-out request cancels just its
+	// stream and the connection stays pooled; if the Wi-Fi drop killed
+	// that connection silently, every later call timed out on it even
+	// after the link recovered (seen live: Jev down for the rest of a run).
+	// Over HTTP/1.1, a canceled request closes its connection.
+	// Built from scratch: cloning http.DefaultTransport copies TLS settings
+	// that already offer h2 during the handshake.
+	t := &http.Transport{
+		Proxy:               http.ProxyFromEnvironment,
+		DialContext:         (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 15 * time.Second}).DialContext,
+		TLSHandshakeTimeout: 5 * time.Second,
+		IdleConnTimeout:     30 * time.Second,
+		MaxIdleConns:        2,
+		Protocols:           new(http.Protocols),
+	}
+	t.Protocols.SetHTTP1(true)
 	return &Client{
-		Endpoint: DefaultEndpoint,
-		Model:    DefaultModel,
-		key:      key,
-		http:     &http.Client{},
+		Endpoint:  DefaultEndpoint,
+		Model:     DefaultModel,
+		key:       key,
+		http:      &http.Client{Transport: t},
+		transport: t,
 	}
 }
 
@@ -150,6 +169,10 @@ func (c *Client) Evaluate(ctx context.Context, state any,
 	req.Header.Set("Content-Type", "application/json")
 	start := time.Now()
 	resp, err := c.http.Do(req)
+	if err != nil {
+		// Never reuse a connection that might be the reason this failed.
+		c.transport.CloseIdleConnections()
+	}
 	if err != nil {
 		return Result{}, fmt.Errorf("jev request: %w", err)
 	}

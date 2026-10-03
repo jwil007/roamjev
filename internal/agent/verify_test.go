@@ -1,8 +1,8 @@
 package agent
 
 import (
-	"slices"
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -22,8 +22,8 @@ func (f *fakeRadio) Scan(_ context.Context, freqs []int) error {
 }
 func (f *fakeRadio) ScanResults(context.Context, string) ([]BSS, error) { return f.res, nil }
 func (f *fakeRadio) Roam(context.Context, string) (RoamResult, error)   { return RoamResult{}, nil }
-func (f *fakeRadio) Prepare() (func(), error)                          { return func() {}, nil }
-func (f *fakeRadio) Counters() (uint64, uint64, error)                 { return 0, 0, nil }
+func (f *fakeRadio) Prepare() (func(), error)                           { return func() {}, nil }
+func (f *fakeRadio) Counters() (uint64, uint64, error)                  { return 0, 0, nil }
 
 func TestVerifyTarget(t *testing.T) {
 	cases := []struct {

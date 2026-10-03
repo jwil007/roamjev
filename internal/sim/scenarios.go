@@ -105,10 +105,10 @@ var ScenarioNames = []string{"hallway", "boundary", "office", "convention", "hos
 
 func hallway() *scenario {
 	s := &scenario{
-		name:     "hallway",
+		name:       "hallway",
 		nrCoverage: 0, // no 802.11k
-		describe: "80 m hallway, four dual-band APs plus a 2.4 GHz AP; one AP congests a minute out of every three; FT-PSK",
-		exponent: 3.0, shadow: 0.6,
+		describe:   "80 m hallway, four dual-band APs plus a 2.4 GHz AP; one AP congests a minute out of every three; FT-PSK",
+		exponent:   3.0, shadow: 0.6,
 		security: "WPA2-PSK", ft: true, roamMs: roamFT,
 		speed: 1.2, pauseEvery: 40,
 		path: []waypoint{{-4, 0, 0, 3}, {82, 0, 0, 3}},
@@ -134,10 +134,10 @@ func hallway() *scenario {
 
 func boundary() *scenario {
 	return &scenario{
-		name:     "boundary",
+		name:       "boundary",
 		nrCoverage: 0,
-		describe: "standing still midway between two identical 5 GHz APs at about -76 dBm each; FT-PSK",
-		exponent: 3.0, shadow: 2.0,
+		describe:   "standing still midway between two identical 5 GHz APs at about -76 dBm each; FT-PSK",
+		exponent:   3.0, shadow: 2.0,
 		security: "WPA2-PSK", ft: true, roamMs: roamFT,
 		path: []waypoint{{45, 0, 1e9, 1e9}},
 		aps: []apSpec{
@@ -154,10 +154,10 @@ func boundary() *scenario {
 // client mostly sits at a desk, with walks to meeting rooms and the kitchen.
 func office() *scenario {
 	s := &scenario{
-		name:     "office",
+		name:       "office",
 		nrCoverage: 1, // managed office network, complete lists
-		describe: "small office, six dual-band APs, lightly loaded (10-30%), FT-PSK; mostly at a desk with occasional walks",
-		exponent: 3.3, shadow: 0.8,
+		describe:   "small office, six dual-band APs, lightly loaded (10-30%), FT-PSK; mostly at a desk with occasional walks",
+		exponent:   3.3, shadow: 0.8,
 		security: "WPA2-PSK", ft: true, roamMs: roamFT,
 		speed: 1.2,
 		path: []waypoint{
@@ -196,10 +196,10 @@ func office() *scenario {
 // walks the aisles slowly and stops at booths.
 func convention() *scenario {
 	s := &scenario{
-		name:     "convention",
+		name:       "convention",
 		nrCoverage: 0.5,
-		describe: "convention hall, 24 APs, busy (55-80% base load) with moving crowd hotspots near 95%, WPA2-PSK without FT; slow walk with booth stops",
-		exponent: 2.7, shadow: 1.0,
+		describe:   "convention hall, 24 APs, busy (55-80% base load) with moving crowd hotspots near 95%, WPA2-PSK without FT; slow walk with booth stops",
+		exponent:   2.7, shadow: 1.0,
 		security: "WPA2-PSK", ft: false, roamMs: roamPSK,
 		speed: 0.8, pauseEvery: 25,
 		path: []waypoint{
@@ -243,10 +243,10 @@ func convention() *scenario {
 // voice badge walks the corridor and stops in rooms.
 func hospital() *scenario {
 	s := &scenario{
-		name:     "hospital",
+		name:       "hospital",
 		nrCoverage: 0.6,
-		describe: "hospital corridor, APs every 30 m, moderate load (25-45%), 802.1X without FT (roams 0.35-1 s, sometimes 2+ s); nurse on a voice badge",
-		exponent: 3.4, shadow: 0.8,
+		describe:   "hospital corridor, APs every 30 m, moderate load (25-45%), 802.1X without FT (roams 0.35-1 s, sometimes 2+ s); nurse on a voice badge",
+		exponent:   3.4, shadow: 0.8,
 		security: "802.1X/EAP", ft: false, roamMs: roamEAP,
 		speed: 1.3,
 		path: []waypoint{
@@ -314,7 +314,7 @@ func corridor() *scenario {
 		security: "WPA2-PSK", ft: true, roamMs: roamFT,
 		speed: 1.4, pauseEvery: 60,
 		nrCoverage: 0,
-		path: []waypoint{{0, 0, 5, 15}, {320, 0, 5, 15}},
+		path:       []waypoint{{0, 0, 5, 15}, {320, 0, 5, 15}},
 		traffic: []phase{{"idle", 3, 20, 60}, {"call", 5, 60, 180},
 			{"download", 2, 20, 60}},
 	}
@@ -326,7 +326,7 @@ func corridor() *scenario {
 		}
 		s.aps = append(s.aps, apSpec{x: float64(i) * 40, y: y,
 			baseUtil: 20 + float64((i*11)%15),
-			radios: []radioSpec{{"5GHz", ch5[i], "80MHz", "802.11ax", 20}}})
+			radios:   []radioSpec{{"5GHz", ch5[i], "80MHz", "802.11ax", 20}}})
 	}
 	s.hot = func(int, time.Duration) float64 { return 0 }
 	return s

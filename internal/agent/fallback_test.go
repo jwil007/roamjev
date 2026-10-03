@@ -16,7 +16,7 @@ type stubPolicy struct {
 	n   int
 }
 
-func (p *stubPolicy) Name() string { return "stub" }
+func (p *stubPolicy) Name() string       { return "stub" }
 func (p *stubPolicy) Notify(PolicyEvent) { p.n++ }
 func (p *stubPolicy) Decide(context.Context, PolicyInput) (PolicyOutput, error) {
 	return p.out, p.err

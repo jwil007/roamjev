@@ -44,7 +44,7 @@ func noiseFloor(band string) float64 {
 }
 
 type ap struct {
-	idx     int // physical AP index in the scenario
+	idx     int      // physical AP index in the scenario
 	shared  *float64 // shadowing shared by all radios of this AP (same path)
 	bssid   string
 	x, y    float64
