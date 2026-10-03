@@ -29,3 +29,17 @@ convention center and hallway, and spends far less airtime scanning. It still
 roams more than classic in the office and lingers on weak signal in the sparse
 hospital corridor. Real-radio comparison is the next step. Total Jev spend
 for all simulation rounds: about $14.
+
+## Round 2: real-world corridor failure (2026-10-02)
+
+A hotel test on real hardware ended in a disconnect. Jev ran one full scan at startup, then only quick scans of known channels, and walked out of range of every AP it knew.
+
+| Round | Change | Result |
+|---|---|---|
+| fix | Full-scan cost had been described as "13.4 s off the home channel"; on ath12k, probes during a full scan showed 0% loss and bursty +30-100 ms latency (the radio returns home between channels). Scan costs are now measured per kind, in one format (duration, loss, typical and peak latency). Classic decides if and only if Jev is down. Safety net added: full scan when degraded (RSSI <= -75 or >= 10% loss), nothing measured in 30 s is 6+ dB stronger, last full scan 30+ s old. Simulator: interleaved scans, 180 s scan-cache expiry, new `corridor` scenario | With realistic scan costs most of the earlier advantage disappears: the old simulator charged scans as ~80% loss, which penalized classic's timer scans |
+| cmp13 | Uniform measured costs; safety net no longer (wrongly) applied to the classic arm | Jev itself chose few full scans: in the corridor 72 of its 84 were the safety net. The safety net was right ~95% of the time (each forced scan found an AP 6+ dB better; about half never seen before) |
+| screens | Replayed blind states (safety net fired), healthy states, moving-healthy states, and states with a clearly better known AP | As recorded, Jev chose a full scan in 0% of blind states. Facts (situation summary, drop projection computed by the code, "none of N known APs stronger", options renamed `refresh_two_known_channels` / `refresh_all_known_channels` / `discover_new_aps`, consequence in the refresh options' not_for) raised that to 20-28% and improved roaming when a better AP was known (60% → 90%). Only speculative text ("APs near it may be ones it has never seen") got Jev to discover reliably (70%), but it also full-scanned 40% of moving-healthy states; live, it scanned 26-38% of the time, mostly at better than -65 dBm. Jev reasons over what it is shown; it does not hypothesize options it hasn't seen. Discovery stays with the safety net |
+| holdout-v12 | Facts-only wording + safety net, seeds 301-310 | About even with classic. Convention: calls +0.08 MOS, good-call time 81% vs 74% (10/10), scanning 37 s vs 88 s. Never disconnected (classic: hospital 0.19%, corridor 0.25%). Hallway effective rate −309 Mb/s, ping-pongs 1.0 vs 0.1 per run. Office and hospital even. Safety net: 4.3 scans per corridor run, 3.4 hospital, ≤1 elsewhere |
+
+Conclusion: Jev plays to its strengths choosing among measured APs, especially in busy environments where context matters. Discovering unseen APs is a blind spot, covered by a code rule. Total Jev spend so far: about $20.
+

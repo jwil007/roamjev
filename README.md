@@ -4,7 +4,7 @@ roamjev is a Linux utility that hands every Wi-Fi roaming and scanning decision 
 roamctl decides with tiers, score weights and hysteresis that you tune. roamjev describes the situation to Jev instead: link quality to the gateway, signal and rates, what the client is doing, how busy the APs are, what each action costs, and what happened after its own recent roams. Jev decides when to scan, how widely, whether to roam, and where. Code measures, describes, executes, and keeps a journal of every decision.
 
 > [!WARNING]
-> This is an experiment. It needs a TypeSafe API key (Jev is in early access), and every decision is a cloud call: if the link is too broken to reach the API, roamjev does nothing until it can.
+> This is an experiment. It needs a TypeSafe API key (Jev is in early access), and every decision is a cloud call. If Jev can't be reached (error, timeout, or spend cap reached), roamctl's algorithm decides until it can.
 
 ![Dashboard](docs/screenshots/dashboard.png)
 
@@ -49,10 +49,16 @@ Every 3 seconds, and right after every scan, roamjev:
 
 1. **Observes** the link: RSSI, MCS and PHY rate from nl80211; loss, latency and jitter to the gateway from ARP probes; interface traffic; scan results; and the AP's 802.11k neighbor list when it provides one.
 2. **Describes** it to Jev as plain measurements with the arithmetic already done ("+15 dB vs current", "about 1.2x the current link", "falling 12 dB over 10s"), plus a briefing of Wi-Fi facts: how bands differ, that airtime is shared, what scans and roams cost, and that switching back and forth is churn.
-3. **Asks** Jev, in one call, what to do (stay, quick scan, known-channel scan, full scan, or roam), where to roam, how urgent it is, and four yes/no diagnostics.
+3. **Asks** Jev, in one call, what to do (stay, refresh two known channels, refresh all known channels, discover new APs with a full scan, or roam), where to roam, how urgent it is, and four yes/no diagnostics.
 4. **Acts** on Jev's top choice. Before a roam it re-measures the target's channel and re-asks Jev if the target moved 6 dB or more.
 
-Code never applies a threshold that triggers or blocks a scan or roam. The only rails are a 5s gap between roams, a 4s gap between scans, a valid target, and a spend cap.
+Every scan option is described with its measured cost: how long the last one took and what it did to gateway loss and latency (typical and peak).
+
+Code never applies a threshold to when or where to roam. Around Jev there are rails, one discovery rule, and a fallback:
+
+- **Rails:** a 5s gap between roams, a 4s gap between scans, a valid target, and a spend cap.
+- **Safety net:** if the link is degraded (RSSI at or below -75 dBm, or 10%+ gateway loss), no AP measured in the last 30s is 6 dB stronger, and the last full scan is 30s+ old, roamjev runs a full scan even if Jev didn't ask for one. Jev is good at choosing among APs it has measured, but it doesn't reason about APs it has never heard. In a long corridor that is exactly what's needed. Disable with `-safety-net=false`.
+- **Fallback:** roamctl's algorithm decides if and only if Jev is unreachable.
 
 > [!NOTE]
 > When roamjev is running, it disables wpa_supplicant's autonomous roaming (bgscan and BTM). The original configuration is restored when it exits.
@@ -69,19 +75,29 @@ Every run is also written to a JSON-lines journal (`/var/lib/roamjev/` as root, 
 
 
 ## Results so far
-roamjev was compared against roamctl's algorithm (ported as `-policy classic`, using roamctl's own scoring and default config) in four simulated environments, with 10 paired runs per environment where both arms see the identical simulated world. These are results on held-out seeds that were never used for tuning:
+roamjev was compared against roamctl's algorithm (ported as `-policy classic`, using roamctl's own scoring and default config) in five simulated environments, with 10 paired runs per environment where both arms see the identical simulated world. These are results on held-out seeds that were never used for tuning:
 
-| Jev vs classic | Office | Convention | Hospital | Hallway |
-|---|---|---|---|---|
-| Avg MOS on calls | +0.05 | **+0.25** | +0.04 | **+0.16** |
-| Time off channel scanning | 0.96% vs 1.18% | **2.15% vs 6.50%** | **2.92% vs 6.70%** | **1.68% vs 3.02%** |
-| Effective rate | **+172 Mb/s** | +6 Mb/s | −21 Mb/s | even |
-| Time on 2.4 GHz | 0 vs 0 | **0.6% vs 14.3%** | 13% vs 19% | 0 vs 0 |
+| Jev vs classic | Office | Convention | Hospital | Hallway | Corridor |
+|---|---|---|---|---|---|
+| Avg MOS on calls | even | **+0.08** | even | +0.02 | +0.08 |
+| Time with good call quality | even | **81% vs 74%** | 78% vs 76% | 95% vs 92% | 73% vs 75% |
+| Time disconnected | 0 vs 0 | 0 vs 0 | **0.06% vs 0.19%** | 0 vs 0 | **0 vs 0.25%** |
+| Time scanning | 23s vs 17s | **37s vs 88s** | 65s vs 75s | even | 123s vs 69s |
+| Effective rate | −67 Mb/s | +10 Mb/s | −14 Mb/s | **−309 Mb/s** | −57 Mb/s |
 
-Jev is at least even everywhere, clearly better on voice in the convention center and hallway, and spends far less airtime scanning. It still roams more than classic in the office and spends more time on weak signal in the sparse hospital corridor. All nine design rounds, including what didn't work, are in [docs/iterations.md](docs/iterations.md).
+Overall Jev is about even with classic.
+
+- **Convention center:** clearly better. Better calls in 10 of 10 runs, with less than half the scanning.
+- **Disconnects:** Jev never lost the connection in any run. Classic did in the hospital and corridor.
+- **Weak spots:**
+  - lower throughput in the hallway, where it gives up 6 GHz more readily;
+  - the occasional ping-pong;
+  - more roams than classic in the office.
+
+Jev chooses well among APs it has measured. It does not decide on its own to search for APs it has never heard, which is why the safety net exists. In the corridor, the safety net ran about 4 full scans per run. All rounds, including what didn't work, are in [docs/iterations.md](docs/iterations.md).
 
 > [!IMPORTANT]
-> These are simulator results. The simulator models propagation, load, scan dwell, and roam time by security type, but it is not a real network.
+> These are simulator results. The simulator models propagation, load, scans (dwell plus returns to the home channel, measured on real hardware), and roam time by security type, but it is not a real network. An earlier version of the simulator charged far too much for scanning, which flattered Jev (it scans less than classic). These numbers use the corrected model.
 
 
 ## Usage
@@ -117,7 +133,7 @@ roamjev -compare ~/.local/state/roamjev/*.jsonl         # paired comparison of r
 roamjev -summary <journal.jsonl>                        # scorecard for one run
 roamjev -replay <journal.jsonl>                         # dashboard for a recorded run
 ```
-Scenarios: `office`, `convention`, `hospital`, `hallway`, `boundary`.
+Scenarios: `office`, `convention`, `hospital`, `hallway`, `corridor` (320 m, no 802.11k: only a full scan finds the APs ahead), `boundary`.
 
 ### Flags
 Run with `sudo roamjev -<ARG> <value>`.
@@ -133,6 +149,8 @@ Run with `sudo roamjev -<ARG> <value>`.
 `-interval`: Time between decisions. Default is `3s`.
 
 `-verify-roam`: Re-measure the target's channel before each roam. Default is on.
+
+`-safety-net`: Run a full scan when the link is degraded and no recently measured AP is clearly stronger. Default is on.
 
 `-min-confidence`: Only roam when Jev's action confidence is at least this. Default is `0` (act on Jev's top choice).
 
