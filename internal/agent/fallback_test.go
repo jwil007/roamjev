@@ -90,3 +90,20 @@ func TestSafetyNet(t *testing.T) {
 		t.Fatalf("recent full scan: got %q", why)
 	}
 }
+
+func TestDropSeconds(t *testing.T) {
+	for _, c := range []struct{ rssi, fell10, fell30, want int }{
+		{-76, 7, 15, 20}, // slower rate 0.5 dB/s: 9 dB in 18 s
+		{-56, 14, 2, 0},  // a 10 s dip that isn't a 30 s trend
+		{-60, 3, 9, 0},   // 25 dB at 0.3 dB/s is more than a minute
+		{-86, 9, 20, 0},  // already past the drop point
+		{-84, 10, 30, 5}, // floor of 5 s
+	} {
+		if got := dropSeconds(c.rssi, c.fell10, c.fell30); got != c.want {
+			t.Errorf("dropSeconds(%d, %d, %d) = %d, want %d", c.rssi, c.fell10, c.fell30, got, c.want)
+		}
+	}
+	if fromWire(wire["scan_full"]) != "scan_full" || fromWire("roam") != "roam" {
+		t.Error("wire names must map back")
+	}
+}

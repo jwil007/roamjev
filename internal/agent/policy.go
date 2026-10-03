@@ -78,12 +78,19 @@ func (p *JevPolicy) Decide(ctx context.Context, in PolicyInput) (PolicyOutput, e
 	if err != nil {
 		return out, err
 	}
+	act := res.Answers["action"]
+	act.Choice = fromWire(act.Choice)
+	probs := make(map[string]float64, len(act.Probabilities))
+	for k, v := range act.Probabilities {
+		probs[fromWire(k)] = v
+	}
+	act.Probabilities = probs
+	res.Answers["action"] = act
 	out.Answers = res.Answers
 	out.Model = res.Model
 	out.Latency = res.Latency
 	out.Tokens = res.Usage.InputTokens
 	out.CostUSD = res.CostUSD
-	act := res.Answers["action"]
 	out.Chosen, out.Confidence = act.Choice, act.Confidence
 	if b, ok := out.TargetIDs[res.Answers["target"].Choice]; ok {
 		out.Target = b

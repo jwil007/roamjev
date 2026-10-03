@@ -290,9 +290,9 @@ func (a *Agent) costs(link Link, cands []Candidate) map[string]any {
 		roam = "no roams measured yet; " + a.securityWords(link)
 	}
 	return map[string]any{
-		"scan_quick": a.scanCost("quick", len(quick), dfs(quick)),
-		"scan_known": a.scanCost("known", len(known), dfs(known)),
-		"scan_full":  a.scanCost("full", 0, 0),
+		wire["scan_quick"]: a.scanCost("quick", len(quick), dfs(quick)),
+		wire["scan_known"]: a.scanCost("known", len(known), dfs(known)),
+		wire["scan_full"]:  a.scanCost("full", 0, 0),
 		"roam":       roam,
 	}
 }
@@ -512,29 +512,92 @@ func (a *Agent) perChannelSeconds() float64 {
 // current link. Facts only: deciding whether that calls for a rescan is
 // Jev's job (with a safety net in agent.go if it doesn't).
 func (a *Agent) envChange(link Link, cands []Candidate) map[string]any {
-	m := map[string]any{}
-	if a.lastFullSet != nil {
-		now := map[string]bool{}
-		for _, b := range a.scan {
-			now[b.BSSID] = true
-		}
-		gone, fresh := 0, 0
-		for b := range a.lastFullSet {
-			if !now[b] {
-				gone++
-			}
-		}
-		for b := range now {
-			if !a.lastFullSet[b] {
-				fresh++
-			}
-		}
-		m["since_last_full_scan"] = fmt.Sprintf("%d of the %d APs it found are no "+
-			"longer heard; %d APs heard since that it didn't find",
-			gone, len(a.lastFullSet), fresh)
+	// No "APs heard since the last full scan" count: only a full scan
+	// can hear new APs, so it read as "nothing has changed" exactly when
+	// the client had walked away from everything it knew.
+	return map[string]any{
+		"stronger_candidates_measured_last_30s": a.strongerFresh(cands),
 	}
-	m["stronger_candidates_measured_last_30s"] = a.strongerFresh(cands)
-	return m
+}
+
+// dropDBm is roughly where a link stops carrying traffic.
+const dropDBm = -85
+
+// dropSeconds projects when a falling signal reaches dropDBm, rounded to
+// 5 s; 0 unless it fell over both the last 10 s and 30 s and the drop is
+// within a minute. It uses the slower of the two rates: a single 10 s
+// window turns a shadowing dip at -56 dBm into "drops in 20 s", which in a
+// live run drove full scans on healthy links. Jev is weak at arithmetic,
+// so the code does it.
+func dropSeconds(rssi, fell10s, fell30s int) int {
+	if fell10s < 3 || fell30s < 3 || rssi <= dropDBm {
+		return 0
+	}
+	rate := min(float64(fell10s)/10, float64(fell30s)/30)
+	secs := float64(rssi-dropDBm) / rate
+	if secs > 60 {
+		return 0
+	}
+	return max(5, int(math.Round(secs/5))*5)
+}
+
+// situation is a one-paragraph summary of the facts that matter most for
+// the scan-or-roam question, gathered from the rest of the state: where
+// the signal is, the best thing the client knows about and how old that
+// knowledge is, and whether it has moved since. Facts only: a speculative
+// "APs near it may be ones it has never seen" made Jev full-scan, but it
+// did so on healthy links too, since the sentence was true of every walk.
+func (a *Agent) situation(link Link, cands []Candidate, moving bool, dropIn int) string {
+	parts := []string{fmt.Sprintf("current signal %d dBm", link.RSSI)}
+	var best *Candidate
+	newest, known, stronger := -1, 0, 0
+	for i := range cands {
+		c := &cands[i]
+		if c.Current {
+			continue
+		}
+		if best == nil || c.RSSI > best.RSSI {
+			best = c
+		}
+		known++
+		if c.RSSIDelta > 0 {
+			stronger++
+		}
+		if newest < 0 || c.SeenAgoS < newest {
+			newest = c.SeenAgoS
+		}
+	}
+	if best != nil {
+		parts = append(parts, fmt.Sprintf("the strongest AP the client knows "+
+			"about read %d dBm, measured %ds ago", best.RSSI, best.SeenAgoS))
+		if stronger == 0 {
+			parts = append(parts, fmt.Sprintf("none of the %d APs it knows "+
+				"about read stronger than its current AP when measured", known))
+		} else {
+			parts = append(parts, fmt.Sprintf("%d of the %d APs it knows "+
+				"about read stronger than its current AP when measured",
+				stronger, known))
+		}
+	} else {
+		parts = append(parts, "the client knows no other APs")
+	}
+	if !a.scanAt.IsZero() && a.scanBSSID != link.BSSID {
+		parts = append(parts, "the client has roamed since that measurement")
+	}
+	if moving {
+		s := "the client is moving"
+		if newest >= 0 {
+			s += fmt.Sprintf(" and the newest measurement of any AP it knows "+
+				"is %ds old", newest)
+		}
+		parts = append(parts, s)
+	}
+	if dropIn > 0 {
+		parts = append(parts, fmt.Sprintf("if the signal keeps falling at "+
+			"this rate it reaches %d dBm, where connections typically drop, "+
+			"in about %d s", dropDBm, dropIn))
+	}
+	return strings.Join(parts, "; ")
 }
 
 // strongerFresh counts candidates measured in the last 30 s whose signal

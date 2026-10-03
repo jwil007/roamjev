@@ -284,11 +284,20 @@ func (a *Agent) buildState(link Link, cands []Candidate, now time.Time) map[stri
 	}
 
 	sig := map[string]any{"rssi_dbm": link.RSSI}
+	fell10, fell30 := 0, 0
 	if r, ok := a.rssiAt(now.Add(-10*time.Second), a.connChange); ok {
 		sig["trend_10s"] = trendWords(float64(link.RSSI-r), "dB", "10s", 3)
+		fell10 = r - link.RSSI
 	}
 	if r, ok := a.rssiAt(now.Add(-30*time.Second), a.connChange); ok {
 		sig["trend_30s"] = trendWords(float64(link.RSSI-r), "dB", "30s", 3)
+		fell30 = r - link.RSSI
+	}
+	dropIn := dropSeconds(link.RSSI, fell10, fell30)
+	if dropIn > 0 {
+		sig["projection"] = fmt.Sprintf("if it keeps falling at this rate "+
+			"it reaches %d dBm, where connections typically drop, in about "+
+			"%d s", dropDBm, dropIn)
 	}
 
 	q10 := gatewayMap(w10)
@@ -422,9 +431,12 @@ func (a *Agent) buildState(link Link, cands []Candidate, now time.Time) map[stri
 		}
 	}
 
+	client := a.clientState(now)
+	moving := strings.HasPrefix(fmt.Sprint(client["motion"]), "probably moving")
 	return map[string]any{
+		"situation":   a.situation(link, cands, moving, dropIn),
 		"briefing":    briefing,
-		"client":      a.clientState(now),
+		"client":      client,
 		"environment": a.environment(link),
 		"action_costs": a.costs(link, cands),
 		"connection": stateLink{
@@ -442,6 +454,30 @@ func (a *Agent) buildState(link Link, cands []Candidate, now time.Time) map[stri
 		"recent_events": a.recent,
 	}
 }
+
+// Jev sees the scan actions under names that say what they do; screening
+// showed the names themselves carry weight ("scan_full" read as the
+// expensive scan, "discover_new_aps" as the way to find APs). Everything
+// else, journals and dashboard included, keeps the short internal names.
+var wire = map[string]string{
+	"scan_quick": "refresh_two_known_channels",
+	"scan_known": "refresh_all_known_channels",
+	"scan_full":  "discover_new_aps",
+}
+
+// fromWire maps a name Jev answered with back to the internal action.
+func fromWire(s string) string {
+	for k, v := range wire {
+		if v == s {
+			return k
+		}
+	}
+	return s
+}
+
+const refreshNotFor = "finding APs on channels not seen yet; it cannot " +
+	"discover new APs, so when every known AP is weaker than the current " +
+	"link, refreshing them won't find a better one"
 
 // questions builds the per-call question set. Choice options must be keys,
 // so each candidate is offered under its stable ap_xxxxxx id. Action options
@@ -480,20 +516,18 @@ func questions(cands []Candidate, verify bool) map[string]jev.Question {
 					"what":    "Keep the current connection and do nothing now",
 					"not_for": "a link that is clearly failing the client's current needs",
 				},
-				"scan_quick": map[string]string{
+				wire["scan_quick"]: map[string]string{
 					"what": "Re-measure two known channels: the strongest " +
 						"candidate's and the known channel measured longest " +
 						"ago; repeating it rotates through every known channel",
-					"not_for": "finding APs on channels not seen yet; it " +
-						"cannot discover new APs",
+					"not_for": refreshNotFor,
 				},
-				"scan_known": map[string]string{
+				wire["scan_known"]: map[string]string{
 					"what": "Re-measure every known channel (from earlier " +
 						"scans and the AP's neighbor list)",
-					"not_for": "finding APs on channels not seen yet; it " +
-						"cannot discover new APs",
+					"not_for": refreshNotFor,
 				},
-				"scan_full": map[string]string{
+				wire["scan_full"]: map[string]string{
 					"what": "Sweep every channel the radio supports; the " +
 						"only way to find APs on channels not seen yet",
 					"not_for": "refreshing APs that are already known",
